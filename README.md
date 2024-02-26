@@ -1,4 +1,4 @@
-<center><span style="font-family: Times New Roman; font-size: 12vw;">Mark</span><span style="font-family: Cambria Math; font-style: italic; font-size: 12vw;">TeX</span></center>
+<div align="center"><img src=logo.svg width=45% /></div>
 
 # MarkTeX 
 
