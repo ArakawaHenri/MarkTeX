@@ -4,7 +4,7 @@
 
 MarkTeX is a refined markup language inspired by Markdown. We've refined Markdown's lack of paper layout options, extended its existing syntax, and combined it with LaTeX to make it more suitable for rich text content. Particularly, this project optimizes the experience of writing academic documents.
 
-# Development Plan:
+# Develop Plan:
 
 We plan to use rust to write a parser that converts MarkTeX to LaTeX files, and then use the wasm compiled by rust with the existing JavaScript parser projects that convert tex to html or pdf to achieve the preview function of the webview based editor and the function of exporting pdfs.
 
@@ -12,17 +12,12 @@ We plan to use rust to write a parser that converts MarkTeX to LaTeX files, and 
 
 ## File header settings: 
 
-<!-- ```
-!# title: Title of the document
-``` -->
-
 ### Paper layout Settings:
 
 You can set the standard paper size directly:
 
 ```
-!# layout: A4, [orientation]
-<!-- orientation can be 'portrait' or 'landscape' -->
+!# layout: A4, [portrait (default), landscape]
 ```
 
 or you can set the paper size manually:
@@ -52,13 +47,29 @@ where the values are in millimeters as well.
 
 These four lines of code express the same purpose, setting the first page as a two-column page and using a single-column layout for each subsequent page. \
 'g' for "global", which represents the default layout in addition to the other specified pages. \
-Numbers without a specified page number are automatically interpreted as the default layout.
+The last number without a specified page number will be automatically interpreted as the default layout if no 'g' specified.
 
 ```
+!# column: 2, 1g, 2
 !# column: 1: 2, 1g, -1: 2
+^ Both of these set the first and last pages as two-column pages, 
+  and the rest as single-column pages.
 ```
 
-Negative numbers can be used to express page numbers counted from the end of the document
+Negative numbers can be used to express page numbers counted from the end of the document. \
+Numbers marked with g will only take effect if there are pages that are not explicitly defined.
+
+```
+!# column: 1, 1, 4, 19g, 5, 1, 4
+^ equivalent to: !# column: 1: 1, 2: 1, 3: 4, 19, -3: 5, -2: 1, -1: 4
+
+  If the document has only 6 pages, the column layout will be:
+  1, 1, 4, 5, 1, 4 for each page respectively, 
+  as all pages have their column layout explicitly defined.
+
+  And if the document has 5 pages, the column layout will be:
+  1, 1, 4, 5, 1, and the last '4' are ignored.
+```
 
 ### Page header and footer settings: 
 
@@ -69,6 +80,11 @@ Negative numbers can be used to express page numbers counted from the end of the
 !# `- Left-aligned header
 !# -`- Center-aligned header
 !# -` Right-aligned header
+```
+
+```
+!# .- Copyright 2024 ArakawaHenri, All rights reserved.
+^ Set a global left-aligned footer for all pages.
 ```
 
 #### Automatic page numbering: 
@@ -110,8 +126,8 @@ The current drafted tags include:
 ```
 font: [font name]
 size: [font size] (in points)
-align: left, center, right, justify
-color: [font color] or rgb([r], [g], [b])
+align: [left (default), center, right, justify]
+color: [color name] or rgb([r], [g], [b])
 bold: true (default) or false
 italic: true (default) or false
 underline: true (default) or false
@@ -127,15 +143,14 @@ Particularly, for ease of use, `[number + pt]` and any color name defined by htm
 [This is a paragraph in 12 point using Times New Roman font.](font: Times New Roman, size: 12)
 [This is a paragraph in 12 point using Times New Roman font.](font: Times New Roman, 12pt)
 [This is a red-colored paragraph.](color: rgb(255, 0, 0))
-[This is a red-colored paragraph.](red)
-[This is a MintCream-colored paragraph.](MintCream)
+[This is a mintcream-colored paragraph.](mintcream)
 [This is a hyperlink in new syntax.](href: https://www.example.com)
 ```
 
 A format setting expression can be interpreted as a hyperlink to achieve markdown compatibility only when a bracket contains only one link and no other tags:
 
 ```
-[This is a hyperlink in markdown syntax.](https://www.example.com)
+[This is a hyperlink in the original markdown syntax.](https://www.example.com)
 ```
 
 ### Scope of formatting:
@@ -161,8 +176,9 @@ For example:
 *w(font: Times New Roman, size: 12)
 ^ This sets the western text to Times New Roman 12pt.
 
-*e(font: 宋体, size: 12) or *e(font: SimSun, size: 12)
-^ This sets the eastern text to SimSun 12pt.
+*e(font: 宋体, size: 12)
+*e(font: SimSun, size: 12)
+^ Both of these set the eastern text to SimSun 12pt.
 
 *l(blue, italic, underline)
 ^ This sets the hyperlink to blue, italic, and underlined.
@@ -177,14 +193,19 @@ Formatting scopes have priority from inside out, front to back, the same as in m
 *w(font: Times New Roman, size: 12)
 *e(font: SimSun, size: 12)
 *l(blue, italic, underline)
-^ This sets the western text to Times New Roman 12pt, the eastern text to SimSun 12pt, and the hyperlink to blue, italic, and underlined.
+^ This sets the western text to Times New Roman 12pt,
+  the eastern text to SimSun 12pt,
+  and the hyperlink to blue, italic, and underlined.
 ```
 
 ```
 *l(blue, italic, underline, size: 13)
 *w(font: Times New Roman, size: 12)
 *e(font: SimSun, size: 12)
-^ Wrong way to set the font, settings for the size of hyperlinks are overridden by later settings for oriental characters and western text. But the settings for the color, italic, and underline of hyperlinks are still valid.
+^ Wrong way to set the font, 
+  settings for the size of hyperlinks are overridden 
+  by later settings for oriental characters and western text. 
+  But the settings for the color, italic, and underline of hyperlinks are still valid.
 ```
 
 ```
@@ -192,8 +213,11 @@ Formatting scopes have priority from inside out, front to back, the same as in m
 *e(font: SimSun, size: 12)
 *l(blue, italic, underline)
 
-[intext settings have the highest priority.](font: Arial, size: 14)
-^ This sets the western text to Times New Roman 12pt, the eastern text to SimSun 12pt, and the hyperlink to blue, italic, and underlined as default. The text in the square brackets is set to Arial 14pt.
+[Intext settings have the highest priority.](font: Arial, size: 14)
+^ This sets the western text to Times New Roman 12pt,
+  the eastern text to SimSun 12pt,
+  and the hyperlink to blue, italic, and underlined as default.
+  The text in the square brackets is set to Arial 14pt.
 ```
 
 ### Undoing settings for a scope:
@@ -231,7 +255,9 @@ Here's something important.
 
 !*
 
-Texts here are still in Times New Roman 12pt, SimSun 12pt, and hyperlinks are still blue, italic, and underlined, as undoing settings for a scope only affects the last setting of the scope.
+Texts here are still in Times New Roman 12pt, SimSun 12pt,
+and hyperlinks are still blue, italic, and underlined,
+as undoing settings for a scope only affects the last setting of the scope.
 ```
 
 Specially, these expressions can be used to undo settings for all scopes:
