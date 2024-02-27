@@ -68,7 +68,7 @@ Numbers marked with g will only take effect if there are pages that are not expl
   as all pages have their column layout explicitly defined.
 
   And if the document has 5 pages, the column layout will be:
-  1, 1, 4, 5, 1, and the last '4' are ignored.
+  1, 1, 4, 5, 1, and the last '4' will be ignored.
 ```
 
 ### Page header and footer settings: 
@@ -212,12 +212,17 @@ Formatting scopes have priority from inside out, front to back, the same as in m
 *w(font: Times New Roman, size: 12)
 *e(font: SimSun, size: 12)
 *l(blue, italic, underline)
-
 [Intext settings have the highest priority.](font: Arial, size: 14)
 ^ This sets the western text to Times New Roman 12pt,
   the eastern text to SimSun 12pt,
   and the hyperlink to blue, italic, and underlined as default.
   The text in the square brackets is set to Arial 14pt.
+```
+
+Intext settings can be nested: 
+
+```
+[If you would like more information, please check [here](href: https://www.example.com).](font: Times New Roman, size: 12)
 ```
 
 ### Undoing settings for a scope:
