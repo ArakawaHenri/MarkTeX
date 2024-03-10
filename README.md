@@ -4,7 +4,7 @@
 
 MarkTeX is a refined markup language inspired by Markdown. We've refined Markdown's lack of paper layout options, extended its existing syntax, and combined it with LaTeX to make it more suitable for rich text content. Particularly, this project optimizes the experience of writing academic documents.
 
-# Develop Plan:
+# Future Plan:
 
 We plan to use rust to write a parser that converts MarkTeX to LaTeX files, and then use the wasm compiled by rust with the existing JavaScript parser projects that convert tex to html or pdf to achieve the preview function of the webview based editor and the function of exporting pdfs.
 
@@ -46,8 +46,8 @@ where the values are in millimeters as well.
 ```
 
 These four lines of code express the same purpose, setting the first page as a two-column page and using a single-column layout for each subsequent page. \
-'g' for "global", which represents the default layout in addition to the other specified pages. \
-The last number without a specified page number will be automatically interpreted as the default layout if no 'g' specified.
+`g` for `global`, which represents the default layout in addition to the other specified pages. \
+The last number without a specified page number will be automatically interpreted as the default layout if no `g` specified.
 
 ```
 !# column: 2, 1g, 2
@@ -70,6 +70,21 @@ Numbers marked with g will only take effect if there are pages that are not expl
   And if the document has 5 pages, the column layout will be:
   1, 1, 4, 5, 1, and the last '4' will be ignored.
 ```
+
+#### Column Margin Settings: 
+
+```
+!# column-margin: [margin for page 1], [margin for page 2], ...
+```
+
+Where the values are in millimeters. \
+If the column number of the coresponding page is 1, the column margin setting for this exact page will be ignored.
+
+```
+!# column-margin: 10, 20g, 30
+```
+
+The logic for more detailed settings is the same as for the setting of columns.
 
 ### Page header and footer settings: 
 
@@ -273,5 +288,43 @@ Specially, these expressions can be used to undo settings for all scopes:
 ```
 
 ## Academic References:
+
+MarkTeX accepts the common BibTeX format for academic references:
+
+```
+[#1](@misc{ Nobody06,
+       author = "Nobody Jr",
+       title = "My Article",
+       year = "2006" })
+```
+
+We designed it to be consistent with the previous formatting syntax. The statement starts with a `[#n]`, where n is the reference number, and then the BibTeX entry enclosed in parentheses.
+
+When adding in-text citations, use the following syntax:
+
+```
+[#1]
+```
+
+or
+
+```
+[#Nobody06]
+```
+
+If you want to add a page number, use the following syntax:
+
+```
+[#1](pp. 1-2)
+[#Nobody06](pp. 1-2)
+```
+
+MarkTeX also supports importing external .bib files, while references being imported do not support numbering:
+
+```
+!# bib: [file name]
+```
+
+
 
 ## ... Still Under Construction
