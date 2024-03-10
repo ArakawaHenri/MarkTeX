@@ -292,21 +292,15 @@ Specially, these expressions can be used to undo settings for all scopes:
 MarkTeX accepts the common BibTeX format for academic references:
 
 ```
-[#1](@misc{ Nobody06,
-       author = "Nobody Jr",
-       title = "My Article",
-       year = "2006" })
+[#](@misc{ Nobody06,
+           author = "Nobody Jr",
+           title = "My Article",
+           year = "2006" })
 ```
 
-We designed it to be consistent with the previous formatting syntax. The statement starts with a `[#n]`, where n is the reference number, and then the BibTeX entry enclosed in parentheses.
+We designed it to be consistent with the previous formatting syntax. The statement starts with a `[#]`, and then the BibTeX entry enclosed in parentheses.
 
 When adding in-text citations, use the following syntax:
-
-```
-[#1]
-```
-
-or
 
 ```
 [#Nobody06]
@@ -315,16 +309,21 @@ or
 If you want to add a page number, use the following syntax:
 
 ```
-[#1](pp. 1-2)
 [#Nobody06](pp. 1-2)
 ```
 
-MarkTeX also supports importing external .bib files, while references being imported do not support numbering:
+MarkTeX also supports importing external .bib files:
 
 ```
-!# bib: [file name]
+!# bib: [reference.bib]
 ```
 
+If custom bibliography style needed, use the following syntax:
 
+```
+!# refstyle: [style.bbx], [style.cbx]
+```
+
+Where .bbx and .cbx are the files for the bibliography and citation style, respectively.
 
 ## ... Still Under Construction
