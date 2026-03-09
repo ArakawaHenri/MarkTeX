@@ -1,18 +1,20 @@
 <div align="center"><img src=logo.svg width=45% /></div>
 
-# MarkTeX 
+# MarkTeX
 
 MarkTeX is a refined markup language inspired by Markdown. We've refined Markdown's lack of paper layout options, extended its existing syntax, and combined it with LaTeX to make it more suitable for rich text content. Particularly, this project optimizes the experience of writing academic documents.
 
-# Future Plan:
+# Future Plan
 
 We plan to use rust to write a parser that converts MarkTeX to LaTeX files, and then use the wasm compiled by rust with the existing JavaScript parser projects that convert tex to html or pdf to achieve the preview function of the webview based editor and the function of exporting pdfs.
 
-# Syntax changed based on markdown (draft) 
+# Syntax changed based on markdown (draft)
 
-## File header settings: 
+## File header settings
 
-### Paper layout Settings:
+These settings should be placed at the beginning of the document, if changed or defined in the middle of the document, it will take effect after instantly making a new page.
+
+### Paper layout Settings
 
 You can set the standard paper size directly:
 
@@ -31,12 +33,18 @@ where width and height are in millimeters.
 Additionally, you can set the margins of the document:
 
 ```
+!# margin: 10.5
 !# margin: [top], [bottom], [left], [right]
+!# margin: 10.5, 10.5, 10.5, 10.5
+!# margin: t: 10.5, b: 10.5, l: 10.5, r: 10.5
+!# margin: l: 10.5, r: 10.5, 12g
+!# margin: top: 10.5, bottom: 10.5, left: 10.5, right: 10.5
+!# margin: top: 10.5mm, bottom: 10.5mm, left: 10.5mm, right: 10.5mm
 ```
 
 where the values are in millimeters as well.
 
-### Column Settings: 
+### Column Settings
 
 ```
 !# column: 2, 1
@@ -71,7 +79,7 @@ Numbers marked with g will only take effect if there are pages that are not expl
   1, 1, 4, 5, 1, and the last '4' will be ignored.
 ```
 
-#### Column Margin Settings: 
+#### Column Margin Settings
 
 ```
 !# column-margin: [margin for page 1], [margin for page 2], ...
@@ -86,7 +94,7 @@ If the column number of the coresponding page is 1, the column margin setting fo
 
 The logic for more detailed settings is the same as for the setting of columns.
 
-### Page header and footer settings: 
+### Page header and footer settings
 
 ```
 !# .- Left-aligned footer
@@ -102,7 +110,7 @@ The logic for more detailed settings is the same as for the setting of columns.
 ^ Set a global left-aligned footer for all pages.
 ```
 
-#### Automatic page numbering: 
+#### Automatic page numbering
 
 In MarkTeX header and footer settings, you can use &lt;N&gt; (Num) and &lt;M&gt; (Max) to freely set the page numbering.
 
@@ -116,7 +124,7 @@ or
 !# -. 第 <N> 页，共 <M> 页
 ```
 
-Additionally, you can use N and M for calculations as long as you like：
+Additionally, you can use N and M for calculations as long as you like (only +,-,*,/ and parentheses)：
 
 ```
 !# -. Still <M-N> pages to go
@@ -128,7 +136,7 @@ or
 !# -. 余 <M-N> 页
 ```
 
-## Fonts & formatting:
+## Fonts & formatting
 
 We have extended the markdown language's hyperlink syntax to provide flexible fonts and formatting support:
 
@@ -168,9 +176,9 @@ A format setting expression can be interpreted as a hyperlink to achieve markdow
 [This is a hyperlink in the original markdown syntax.](https://www.example.com)
 ```
 
-### Scope of formatting:
+### Scope of formatting
 
-To minimise the hassle, we introduced the concept of scopes, where a scope is labelled with a '*'. \
+To minimise the hassle, we introduced the concept of scopes, where a scope is labelled with a '*' and in a exclusive row.
 We defined the following scope for now:
 
 ```
@@ -234,15 +242,15 @@ Formatting scopes have priority from inside out, front to back, the same as in m
   The text in the square brackets is set to Arial 14pt.
 ```
 
-Intext settings can be nested: 
+Intext settings can be nested:
 
 ```
 [If you would like more information, please check [here](href: https://www.example.com).](font: Times New Roman, size: 12)
 ```
 
-### Undoing settings for a scope:
+### Unsetting settings for a scope
 
-To undo settings for a scope, use the following syntax:
+To remove a setting for a scope, use the following syntax:
 
 ```
 ![scope]
@@ -260,7 +268,7 @@ Here's something important.
 Something regular.
 ```
 
-Undoing settings for a scope will only only affects the last setting of the scope:
+Removing settings for a scope will only only affects the last setting of the scope:
 
 ```
 *w(font: Times New Roman, size: 12)
@@ -287,7 +295,7 @@ Specially, these expressions can be used to undo settings for all scopes:
 !all
 ```
 
-## Academic References:
+## Academic References
 
 MarkTeX accepts the common BibTeX format for academic references:
 
@@ -309,7 +317,8 @@ When adding in-text citations, use the following syntax:
 If you want to add a page number, use the following syntax:
 
 ```
-[#Nobody06](pp. 1-2)
+[#Nobody06](pages: 1-2)
+[#Nobody06](pages: 1, 2)
 ```
 
 MarkTeX also supports importing external .bib files:
@@ -321,9 +330,8 @@ MarkTeX also supports importing external .bib files:
 If custom bibliography style needed, use the following syntax:
 
 ```
-!# refstyle: [style.bbx], [style.cbx]
+!# bibstyle: [style.bbx]
+!# citestyle: [style.cbx]
 ```
-
-Where .bbx and .cbx are the files for the bibliography and citation style, respectively.
 
 ## ... Still Under Construction
