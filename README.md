@@ -4,334 +4,170 @@
 
 MarkTeX is a refined markup language inspired by Markdown. We've refined Markdown's lack of paper layout options, extended its existing syntax, and combined it with LaTeX to make it more suitable for rich text content. Particularly, this project optimizes the experience of writing academic documents.
 
-# Future Plan
+# Basic Syntax
 
-We plan to use rust to write a parser that converts MarkTeX to LaTeX files, and then use the wasm compiled by rust with the existing JavaScript parser projects that convert tex to html or pdf to achieve the preview function of the webview based editor and the function of exporting pdfs.
+MarkTeX is based on Markdown, so all standard Markdown syntax is supported. MarkTeX extends this with a powerful, structural logic called **MOS (MarkTeX Object Syntax)**.
 
-# Syntax changed based on markdown (draft)
+The extended syntax follows these five core patterns:
 
-## File header settings
+- `!# [MOS]` for modifying **intrinsic state variables**.
+- `!@ [MOS]` for opening a scoped style (e.g., western/eastern fonts).
+- `!!@ [scope]` for ending a scoped style.
+- `!$ [Python expression]` for defining custom variables and logic.
+- `[]([MOS])` for in-text formatting (extended from Markdown's hyperlink syntax).
+- `[^ [MOS]]` for academic references (extended from Markdown's footnote syntax).
+- `[$ [Python expression]]` for evaluating variables in text.
 
-These settings should be placed at the beginning of the document, if changed or defined in the middle of the document, it will take effect after instantly making a new page.
+---
 
-### Paper layout Settings
+## MarkTeX Object Syntax (MOS)
 
-You can set the standard paper size directly:
+MOS is the "brain" of MarkTeX. It allows you to describe complex layouts and styles using simple, intuitive punctuation. Think of it as **"Separator Gravity"**:
 
+1.  **`:` (Nesting)**: Goes one level deeper. (e.g., `margin: top: 10`)
+2.  **`,` (Sub-separator)**: Separates items **within** the same level. (e.g., `top: 10, bottom: 10`)
+3.  **`;` (Top-separator)**: Breaks back to the **top level** of the command. (e.g., `layout: A4; margin: 10`)
+4.  **`()` (Grouping)**: Explicitly groups a block of MOS to avoid ambiguity in deep nesting.
+5.  **Tags**: Values without a colon (like `bold`, `12pt`) are shorthand "tags".
+
+---
+
+## Document & Page Level Settings (`!#`)
+
+In MarkTeX, the document state is managed by a set of **Intrinsic Variables**. While the `!#` command uses lowercase keys for ease of typing, it essentially modifies the corresponding internal state.
+
+All settings are **sticky**: they apply from the page they are defined on until the state is overwritten.
+
+### Paper Layout & Margins
+```marktex
+!# layout: A4, landscape; margin: 10.5
+-- Equivalent to setting global state for layout and margin.
+
+!# margin: top: 20
+-- Only the 'top' sub-setting is overwritten.
 ```
-!# layout: A4, [portrait (default), landscape]
-```
-
-or you can set the paper size manually:
-
-```
-!# layout: [width], [height]
-```
-
-where width and height are in millimeters.
-
-Additionally, you can set the margins of the document:
-
-```
-!# margin: 10.5
-!# margin: [top], [bottom], [left], [right]
-!# margin: 10.5, 10.5, 10.5, 10.5
-!# margin: t: 10.5, b: 10.5, l: 10.5, r: 10.5
-!# margin: l: 10.5, r: 10.5, 12g
-!# margin: top: 10.5, bottom: 10.5, left: 10.5, right: 10.5
-!# margin: top: 10.5mm, bottom: 10.5mm, left: 10.5mm, right: 10.5mm
-```
-
-where the values are in millimeters as well.
 
 ### Column Settings
+```marktex
+!# column: count: 2, gap: 5
+-- Two-column layout starts here.
 
-```
-!# column: 2, 1
-!# column: 2, 1g
-!# column: 1: 2, 1
-!# column: 1: 2, 1g
-```
+... content ...
 
-These four lines of code express the same purpose, setting the first page as a two-column page and using a single-column layout for each subsequent page. \
-`g` for `global`, which represents the default layout in addition to the other specified pages. \
-The last number without a specified page number will be automatically interpreted as the default layout if no `g` specified.
-
-```
-!# column: 2, 1g, 2
-!# column: 1: 2, 1g, -1: 2
-^ Both of these set the first and last pages as two-column pages, 
-  and the rest as single-column pages.
+!# column: count: 1
+-- Returns to single-column layout.
 ```
 
-Negative numbers can be used to express page numbers counted from the end of the document. \
-Numbers marked with g will only take effect if there are pages that are not explicitly defined.
-
-```
-!# column: 1, 1, 4, 19g, 5, 1, 4
-^ equivalent to: !# column: 1: 1, 2: 1, 3: 4, 19, -3: 5, -2: 1, -1: 4
-
-  If the document has only 6 pages, the column layout will be:
-  1, 1, 4, 5, 1, 4 for each page respectively, 
-  as all pages have their column layout explicitly defined.
-
-  And if the document has 5 pages, the column layout will be:
-  1, 1, 4, 5, 1, and the last '4' will be ignored.
+### Header & Footer
+Headers and footers are strings that can evaluate intrinsic variables (referenced in **UPPERCASE**) in real-time.
+```marktex
+!# header: left: "MarkTeX Draft", right: "[$ PAGE.N ] / [$ PAGE.MAX ]"
+!# footer: center: "Still [$ PAGE.MAX - PAGE.N ] pages to go"
 ```
 
-#### Column Margin Settings
+---
 
-```
-!# column-margin: [margin for page 1], [margin for page 2], ...
-```
+## Scoped Styles (`!@` & `!!@`)
 
-Where the values are in millimeters. \
-If the column number of the coresponding page is 1, the column margin setting for this exact page will be ignored.
+Scoped styles apply formatting or layout changes to specific text types or regions. The command `!@` is followed by a MOS object with lowercase keys.
 
-```
-!# column-margin: 10, 20g, 30
-```
+### Built-in Scopes
+- `w` (western): Western characters.
+- `e` (eastern): CJK/Full-width characters.
+- `l` (link): Hyperlinks.
+- `h1` - `h6`: Headings.
+- **Custom Scopes**: Use `!@ (props)` to create a generic block scope.
 
-The logic for more detailed settings is the same as for the setting of columns.
+### Usage
+```marktex
+!@ w: font: "Times New Roman", 12pt; e: font: "SimSun", 12pt
 
-### Page header and footer settings
+This mixed text (中西文混排) uses Times and SimSun automatically.
 
-```
-!# .- Left-aligned footer
-!# -.- Center-aligned footer
-!# -. Right-aligned footer
-!# `- Left-aligned header
-!# -`- Center-aligned header
-!# -` Right-aligned header
+!!@ w
+Now western text returns to default, but eastern text is still SimSun.
+!!@ e
 ```
 
-```
-!# .- Copyright 2024 ArakawaHenri, All rights reserved.
-^ Set a global left-aligned footer for all pages.
-```
+### Localized Layouts (Columns in Scopes)
+You can modify the `column` state within a scope:
 
-#### Automatic page numbering
+```marktex
+!@ column: count: 2, gap: 5
 
-In MarkTeX header and footer settings, you can use &lt;N&gt; (Num) and &lt;M&gt; (Max) to freely set the page numbering.
+This specific block of text will be rendered in two columns. 
+Once the scope is closed, the layout reverts to the previous global state.
 
-```
-!# -. Page <N> of <M>
-```
-
-or
-
-```
-!# -. 第 <N> 页，共 <M> 页
+!!@ column
 ```
 
-Additionally, you can use N and M for calculations as long as you like (only +,-,*,/ and parentheses)：
+---
 
-```
-!# -. Still <M-N> pages to go
-```
+## In-text Formatting
 
-or
-
-```
-!# -. 余 <M-N> 页
-```
-
-## Fonts & formatting
-
-We have extended the markdown language's hyperlink syntax to provide flexible fonts and formatting support:
-
-```
-[Text]([tag1]: [value], [tag2]: [value], ...)
+### Inline Styles `[]()`
+The classic Markdown link syntax is now a style powerhouse:
+```marktex
+[This is blue and bold](color: blue, bold, 14pt)
+[Nested styles [look like this](red)](font: "Arial")
 ```
 
-The current drafted tags include:
+### Evaluation `[$ ]`
+Insert the result of any Python-style expression using intrinsic variables in **UPPERCASE**:
+`Today is [$ TIME.strftime("%Y-%m-%d") ].`
+`The deadline is in [$ 24 - TIME.hour ] hours.`
 
-```
-font: [font name]
-size: [font size] (in points)
-align: [left (default), center, right, justify]
-color: [color name] or rgb([r], [g], [b])
-bold: true (default) or false
-italic: true (default) or false
-underline: true (default) or false
-strikethrough: true (default) or false
-linespacing: [value] (in points)
-rowspacing: [value] (in points)
-href or link: [link]
-```
+---
 
-Particularly, for ease of use, `[number + pt]` and any color name defined by html can also be used directly as a tag without the parameter.
+## Academic References (`[^]`)
 
-```
-[This is a paragraph in 12 point using Times New Roman font.](font: Times New Roman, size: 12)
-[This is a paragraph in 12 point using Times New Roman font.](font: Times New Roman, 12pt)
-[This is a red-colored paragraph.](color: rgb(255, 0, 0))
-[This is a mintcream-colored paragraph.](mintcream)
-[This is a hyperlink in new syntax.](href: https://www.example.com)
+MarkTeX unifies bibliography management into the `[^]` pattern.
+
+### Defining References (BibTeX)
+```marktex
+[^ @article{Nobody06, 
+     author: "Nobody Jr", 
+     title: "My Article", 
+     year: "2006"} ]
 ```
 
-A format setting expression can be interpreted as a hyperlink to achieve markdown compatibility only when a bracket contains only one link and no other tags:
+### State Manipulation
+Intrinsic variables like `BIB` are **Smart Objects**. They support direct assignment and overloaded operators, making it easy to manage collections:
 
-```
-[This is a hyperlink in the original markdown syntax.](https://www.example.com)
-```
+```marktex
+!# bib: "main.bib"
+-- Set initial bib file.
 
-### Scope of formatting
+!# bib: [$ BIB + "additional.bib" ]
+-- Smart Objects support direct addition of single strings or lists.
 
-To minimise the hassle, we introduced the concept of scopes, where a scope is labelled with a '*' and in a exclusive row.
-We defined the following scope for now:
-
-```
-*: All text
-*w or *western: Western text
-*e or *eastern: Eastern Full-width text (Chinese, Japanese, Korean, ...)
-*l or *link: Hyperlink
-*h or *heading: Heading
-*h1, *h2, *h3, *h4, *h5, *h6: Heading 1-6
+!# bib: [$ BIB - "old.bib" ]
+-- Removing a file is just as intuitive.
 ```
 
-For example:
-
-```
-*(font: Times New Roman, size: 12)
-^ This sets the entire document to Times New Roman 12pt.
-
-*w(font: Times New Roman, size: 12)
-^ This sets the western text to Times New Roman 12pt.
-
-*e(font: 宋体, size: 12)
-*e(font: SimSun, size: 12)
-^ Both of these set the eastern text to SimSun 12pt.
-
-*l(blue, italic, underline)
-^ This sets the hyperlink to blue, italic, and underlined.
-
-*h(bold)
-^ This sets all headings to bold.
+### Citing
+```marktex
+As shown in [^ Nobody06], the theory holds.
+[^ id: Nobody06; pages: 12-15 ] -- Citation with specific pages.
 ```
 
-Formatting scopes have priority from inside out, front to back, the same as in mathematical calculations. However, the setting of a particular scope only affects the tags it explicitly sets and does not override the setting of other scopes:
+---
 
-```
-*w(font: Times New Roman, size: 12)
-*e(font: SimSun, size: 12)
-*l(blue, italic, underline)
-^ This sets the western text to Times New Roman 12pt,
-  the eastern text to SimSun 12pt,
-  and the hyperlink to blue, italic, and underlined.
-```
+## Appendix: Intrinsic Variables Reference
 
-```
-*l(blue, italic, underline, size: 13)
-*w(font: Times New Roman, size: 12)
-*e(font: SimSun, size: 12)
-^ Wrong way to set the font, 
-  settings for the size of hyperlinks are overridden 
-  by later settings for oriental characters and western text. 
-  But the settings for the color, italic, and underline of hyperlinks are still valid.
-```
+In MarkTeX, the document state is a collection of **Intrinsic Variables**. Use them in **UPPERCASE** within `[$ ]` or `!$ ` expressions. When using `!#`, the corresponding lowercase keys are used.
 
-```
-*w(font: Times New Roman, size: 12)
-*e(font: SimSun, size: 12)
-*l(blue, italic, underline)
-[Intext settings have the highest priority.](font: Arial, size: 14)
-^ This sets the western text to Times New Roman 12pt,
-  the eastern text to SimSun 12pt,
-  and the hyperlink to blue, italic, and underlined as default.
-  The text in the square brackets is set to Arial 14pt.
-```
+| Variable | Sub-properties / Tags | Description |
+| :--- | :--- | :--- |
+| **`PAGE`** | `N`, `MAX` | `N`: Current page index; `MAX`: Total page count. |
+| **`TIME`** | `year`, `month`, `day`, `hour`, `minute`, `strftime()` | System time object (Python `datetime` style). |
+| **`LAYOUT`** | `width`, `height`, `landscape`, `portrait` | Controls paper size and orientation. |
+| **`MARGIN`** | `top`, `bottom`, `left`, `right` | Page margins in millimeters. |
+| **`COLUMN`** | `count`, `gap` | `count`: Number of columns; `gap`: Gutter width. |
+| **`HEADER`** | `left`, `center`, `right`, `justify` | Content of the page header. |
+| **`FOOTER`** | `left`, `center`, `right`, `justify` | Content of the page footer. |
+| **`BIB`** | (Smart Object) | Bibliography files. Supports `+` and `-` operators. |
 
-Intext settings can be nested:
+---
+*MarkTeX - Making academic writing as easy as Markdown, as powerful as LaTeX.*
 
-```
-[If you would like more information, please check [here](href: https://www.example.com).](font: Times New Roman, size: 12)
-```
-
-### Unsetting settings for a scope
-
-To remove a setting for a scope, use the following syntax:
-
-```
-![scope]
-```
-
-For example:
-
-```
-*(bold)
-
-Here's something important.
-
-!*
-
-Something regular.
-```
-
-Removing settings for a scope will only only affects the last setting of the scope:
-
-```
-*w(font: Times New Roman, size: 12)
-*e(font: SimSun, size: 12)
-*l(blue, italic, underline)
-
-... some text ...
-
-*(bold)
-
-Here's something important.
-
-!*
-
-Texts here are still in Times New Roman 12pt, SimSun 12pt,
-and hyperlinks are still blue, italic, and underlined,
-as undoing settings for a scope only affects the last setting of the scope.
-```
-
-Specially, these expressions can be used to undo settings for all scopes:
-
-```
-!**
-!all
-```
-
-## Academic References
-
-MarkTeX accepts the common BibTeX format for academic references:
-
-```
-[#](@misc{ Nobody06,
-           author = "Nobody Jr",
-           title = "My Article",
-           year = "2006" })
-```
-
-We designed it to be consistent with the previous formatting syntax. The statement starts with a `[#]`, and then the BibTeX entry enclosed in parentheses.
-
-When adding in-text citations, use the following syntax:
-
-```
-[#Nobody06]
-```
-
-If you want to add a page number, use the following syntax:
-
-```
-[#Nobody06](pages: 1-2)
-[#Nobody06](pages: 1, 2)
-```
-
-MarkTeX also supports importing external .bib files:
-
-```
-!# bib: [reference.bib]
-```
-
-If custom bibliography style needed, use the following syntax:
-
-```
-!# bibstyle: [style.bbx]
-!# citestyle: [style.cbx]
-```
-
-## ... Still Under Construction
