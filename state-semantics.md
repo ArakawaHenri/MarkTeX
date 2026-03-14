@@ -102,6 +102,31 @@ Typical fields include:
 
 PageState affects page construction rather than immediate inline rendering.
 
+Some fields outside strict `PageState`, especially page-bound flow settings such as columns, share the same activation constraint:
+they must take effect on a fresh page boundary rather than halfway through an already materialized page.
+
+---
+
+## 3.2.1 Page-Bound Transition Rule
+
+If a persistent patch changes a page-bound field after document content has already begun, the new value does not retroactively affect the partially filled current page.
+
+Instead, the semantic effect is:
+
+1. finish the current page under the old page-bound state,
+2. insert an explicit semantic page break,
+3. and activate the new page-bound state from the next page onward.
+
+This rule applies to canonical page-bound fields such as:
+
+* layout,
+* margins,
+* header/footer,
+* and page-bound column settings.
+
+This explicit page break is a semantic artifact of the compiler.
+It is distinct from ordinary engine pagination.
+
 ---
 
 ## 3.3 FlowState

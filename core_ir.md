@@ -31,6 +31,7 @@ MarkTeX is:
 
 MarkTeX is **not** defined by Markdown compatibility.
 Markdown is a source-level inheritance and fallback layer, not the semantic core.
+Where MarkTeX and Markdown surface forms overlap, MarkTeX has priority and Markdown only interprets the residual structure left after MarkTeX resolution.
 
 TeX is **not** the semantic authority of the language.
 TeX is the primary backend.
@@ -176,6 +177,7 @@ InlineSeq = [Inline]
 Block =
     Paragraph
   | Heading
+  | PageBreak
   | ListBlock
   | QuoteBlock
   | CodeBlock
@@ -207,6 +209,19 @@ Heading {
   origin: Origin
 }
 ```
+
+### PageBreak
+
+```text
+PageBreak {
+  cause: PageBreakCause,
+  origin: Origin
+}
+```
+
+This is an explicit semantic page boundary.
+It is distinct from engine-emergent pagination.
+One common cause is a page-bound state transition such as a mid-flow change to layout, margins, columns, header, or footer.
 
 ### CodeBlock
 
@@ -780,6 +795,9 @@ The construct is resolved as MTX inline control iff all of the following hold:
 2. the resulting object is valid in inline-style position,
 3. semantic validation succeeds for that object kind.
 
+Therefore MTX acceptance depends on full parse success plus successful schema binding and contextual legality.
+Syntactic MOS success alone is not enough.
+
 If all three hold, the result is:
 
 ```text
@@ -791,6 +809,12 @@ StyledSpan { patch: InlinePatch(...), content: ... }
 Otherwise, the entire construct falls back to Markdown interpretation.
 
 Fallback is whole-node, not partial.
+
+This includes cases where:
+
+* MOS parsing succeeds,
+* but binding fails,
+* or the bound object is illegal in inline context.
 
 This rule is normative.
 There is no heuristic mixed mode.
@@ -821,6 +845,8 @@ The construct is resolved as MTX rich image control iff all of the following hol
 2. the resulting object is valid in image-call position,
 3. semantic validation succeeds for that object kind.
 
+Again, syntactic MOS success without successful binding/context validation is not enough.
+
 If all three hold, the result is an `Image` node carrying the schema-defined source and local image patch semantics.
 
 ### 10.4.2 Fallback
@@ -841,6 +867,7 @@ Python execution occurs in the transition from NIR to EIR.
 ### 11.1 Execution Forms
 
 * `!$ ...` introduces executable host statements.
+* `!$``` ... !$``` ` introduces executable multi-line host blocks.
 * `[$ ... ]` introduces evaluable host expressions.
 * host functions may return document nodes, patches, objects, or concrete values.
 

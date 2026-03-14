@@ -86,6 +86,18 @@ Primary outputs:
 * CST,
 * Surface AST.
 
+### `mtx_collect`
+
+Responsibilities:
+
+* document-wide weak-order declaration collection,
+* footnote-definition indexing,
+* future label/ref pre-collection,
+* bibliography-source indexing,
+* and other global indices that should not depend on lexical declaration order.
+
+This pass should run after surface capture but before semantic validation that depends on globally visible declarations.
+
 ### `mtx_schema`
 
 Responsibilities:
@@ -298,6 +310,7 @@ Recommended MVP:
 
 * core Markdown blocks and inline text,
 * directives: `!#`, `!@`, `!!@`, `!$`,
+* dedicated multi-line `!$` host blocks,
 * `[$ ... ]`,
 * bracket-call fallback,
 * image-call fallback and rich-image mode,
@@ -387,6 +400,7 @@ Build:
 
 * host environment,
 * live compiler-owned intrinsic mutation,
+* single-line and block-form host execution,
 * read-only symbolic intrinsic values,
 * mutation logging,
 * return-value lifting,

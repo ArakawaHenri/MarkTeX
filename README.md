@@ -13,10 +13,10 @@ The extended syntax is built from a small set of reusable surface forms:
 - `!# [MOS]` for modifying **intrinsic state variables**.
 - `!@ [MOS]` for opening a scoped style (e.g., western/eastern fonts).
 - `!!@ [scope]` for ending a scoped style.
-- `!$ [Python code]` for defining custom variables and logic.
+- `!$ [Python code]` or `!$```[lang] ... !$``` ` for executing compile-time Python.
 - `[content](payload)` for in-text formatting with Markdown fallback.
 - `![alt](payload)` for rich images with Markdown fallback.
-- `[^ [MOS]]` for academic references (extended from Markdown's footnote syntax).
+- `[^label]` / `[^label]: ...` for Markdown-compatible footnotes, and `[^ @key ]` or `[^ id: key; ... ]` for MarkTeX citations.
 - `[$ [Python expression]]` for evaluating variables in text.
 - `$...$` and `$$...$$` for inline and display math.
 - ```` ```interp ```` or ```` ```lang interp ```` for interpolated literal code fences.
@@ -26,6 +26,29 @@ The extended syntax is built from a small set of reusable surface forms:
 * `!#` is the declarative syntax,
 * `!$` may mutate live intrinsic objects imperatively,
 * engine-owned values such as `PAGE.N` remain readable symbolic objects rather than writable configuration.
+
+Markdown remains the inherited authoring layer, but it is always lower-priority than explicit MarkTeX syntax.
+When a source form is claimed by MarkTeX, it is interpreted as MarkTeX first and only falls back to Markdown where the language explicitly permits fallback.
+
+---
+
+## Directive Families
+
+MarkTeX intentionally groups its control syntax into one family:
+
+- `!#` means persistent document design.
+- `!@` means scoped style or scoped state.
+- `!!@` means explicit scoped close.
+- `!$` means compile-time host execution.
+
+This is not arbitrary punctuation.
+`!#`, `!@`, and `!$` were chosen as a coherent control surface:
+
+- `#` evokes document-level setup,
+- `@` evokes attachment to a scope,
+- `$` evokes execution and evaluation.
+
+The language should continue to grow through this family rather than by introducing unrelated control syntaxes.
 
 ---
 
@@ -65,6 +88,9 @@ In MarkTeX, the document state is managed by a set of **Intrinsic Variables**. W
 
 All settings are **sticky**: they apply from the page they are defined on until the state is overwritten.
 
+For page-bound state such as `layout`, `margin`, `column`, `header`, and `footer`, a change that occurs after document content has begun takes effect on a fresh page.
+MarkTeX therefore treats such transitions as semantic page-boundary changes rather than allowing one physical page to mix incompatible page-level settings.
+
 ### Paper Layout & Margins
 ```marktex
 !# layout: A4, landscape; margin: 10.5
@@ -90,6 +116,13 @@ Headers and footers are strings that can evaluate intrinsic variables (reference
 ```marktex
 !# header: left: "MarkTeX Draft", right: "[$ PAGE.N ] / [$ PAGE.MAX ]"
 !# footer: center: "Still [$ PAGE.MAX - PAGE.N ] pages to go"
+```
+
+### Bibliography Style
+Bibliography style is document-level configuration, not inline citation syntax:
+```marktex
+!# bibstyle: "numeric.bbx"
+!# citestyle: "numeric.cbx"
 ```
 
 ---
@@ -152,6 +185,22 @@ Insert the result of any Python-style expression using intrinsic variables in **
 `Today is [$ TIME.strftime("%Y-%m-%d") ].`
 `The deadline is in [$ 24 - TIME.hour ] hours.`
 
+### Host Execution `!$`
+Single-line host code remains available:
+```marktex
+!$ x = 10
+```
+
+Multi-line host code uses a dedicated executable block syntax rather than ordinary Markdown fences:
+````marktex
+!$```python
+x = 10
+
+def double(n):
+    return n * 2
+!$```
+````
+
 ---
 
 ## Images, Math, and Code
@@ -188,19 +237,29 @@ today = "[$ TIME.strftime(\"%Y-%m-%d\") ]"
 
 ---
 
-## Academic References (`[^]`)
+## Footnotes And Citations (`[^]`)
 
-MarkTeX unifies bibliography management into the `[^]` pattern.
+MarkTeX keeps bare `[^label]` aligned with Markdown footnotes, and reserves explicit citation forms for MarkTeX-specific behavior.
 
-### Defining References (BibTeX)
+### Markdown-Compatible Footnotes
 ```marktex
-[^ @article{Nobody06, 
-     author: "Nobody Jr", 
-     title: "My Article", 
-     year: "2006"} ]
+Here is a note.[^note1]
+
+[^note1]: This is the footnote body.
+    This continuation line is still part of the same footnote.
 ```
 
-### State Manipulation
+### MarkTeX Citations
+```marktex
+As shown in [^ @Nobody06], the theory holds.
+[^ id: Nobody06; pages: 12-15 ] -- Citation with specific pages.
+```
+
+Citation forms are passed through to the backend without compile-time existence checking.
+Bibliography sources are configured separately through persistent document state.
+Footnotes, however, are still part of the document surface and should be cross-checked against their local definitions.
+
+### Bibliography State
 Intrinsic variables like `BIB` are **Smart Objects**. They support direct assignment and overloaded operators, making it easy to manage collections:
 
 ```marktex
@@ -212,12 +271,6 @@ Intrinsic variables like `BIB` are **Smart Objects**. They support direct assign
 
 !# bib: [$ BIB - "old.bib" ]
 -- Removing a file is just as intuitive.
-```
-
-### Citing
-```marktex
-As shown in [^ Nobody06], the theory holds.
-[^ id: Nobody06; pages: 12-15 ] -- Citation with specific pages.
 ```
 
 ---

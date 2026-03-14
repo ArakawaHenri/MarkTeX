@@ -46,6 +46,9 @@ The central law is:
 Python therefore does not replace the language core.
 It operates through it.
 
+MarkTeX intentionally treats Python as a strong compile-time host language.
+The goal is not a tiny scripting escape hatch, but a formally defined host environment with explicit bridge rules into typed IR and typed state effects.
+
 ---
 
 ## 3. Execution Phase
@@ -88,6 +91,14 @@ Surface form:
 !$ <python-code>
 ```
 
+or:
+
+```text
+!$```[info-string]
+...
+!$```
+```
+
 This introduces host-side executable code.
 
 Its normalized form is:
@@ -106,6 +117,9 @@ Statement execution may:
 * perform arbitrary Python computation.
 
 A statement does not directly yield inline text unless it explicitly constructs or emits nodes.
+
+The host-block form is a multi-line statement block.
+It is lexically ordered with single-line `!$` statements and is semantically the same host-execution family rather than a separate sublanguage.
 
 ---
 
@@ -154,6 +168,8 @@ is valid because the binding of `x` persists to the later evaluation point.
 The default rule is:
 
 > later host code sees the effects of earlier host code in the same compilation unit.
+
+This applies equally across single-line `!$` statements and host blocks.
 
 ---
 

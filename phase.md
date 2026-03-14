@@ -121,6 +121,7 @@ Responsible for:
 * expanding multi-declaration `!@` payloads into an explicit scoped declaration stream,
 * assigning patch lifetimes,
 * making scope structure explicit,
+* collecting weak-order declarations such as footnote definitions and bibliography sources into document-wide indices,
 * validating context legality,
 * normalizing interpolated fences and delegated math nodes,
 * preserving host expressions without executing them.
@@ -274,6 +275,7 @@ This implies:
 * concrete expression reduction
 * symbolic vs concrete expression classification
 * host-side semantic object construction
+* explicit semantic page-break insertion caused by page-bound state transitions
 
 ## 6.5 Must be decided by TIR
 
@@ -287,7 +289,7 @@ This implies:
 
 * actual page numbers
 * final page count
-* actual page breaks
+* implicit page breaks not forced semantically by explicit `PageBreak` nodes
 * running marks based on final pagination
 * aux-file resolved cross-reference positions
 

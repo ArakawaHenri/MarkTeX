@@ -34,10 +34,14 @@ MarkTeX source syntax follows four principles:
 3. **Unified object notation**
    MOS is the canonical surface notation for structured control payloads.
 
-4. **Fallback by failure, not by guessing**
-   When a MarkTeX-specific interpretation fails, the construct falls back in a rule-governed way.
+4. **MarkTeX priority over Markdown**
+   When a source form is recognized by MarkTeX, the MarkTeX interpretation is attempted first.
+   Markdown applies only where the language explicitly leaves residual structure for Markdown inheritance.
 
-5. **Literal islands stay literal**
+5. **Fallback by failure, not by guessing**
+   When a MarkTeX-specific interpretation fails and fallback is permitted for that construct, the construct falls back in a rule-governed way.
+
+6. **Literal islands stay literal**
    Some regions are intentionally non-prose. Inside them, only explicitly enabled sublanguage forms remain active.
 
 ---
@@ -231,6 +235,8 @@ A directive line begins with one of:
 A line is recognized as a directive line only if, after stripping outer whitespace, the entire remaining line is exactly one directive form.
 Directive introducers do not take effect in the middle of ordinary paragraph content.
 
+A line beginning with `!$` followed immediately by one or more backticks begins a host block, not an ordinary fenced code block.
+
 All other non-comment lines are initially eligible for Markdown block parsing.
 
 ---
@@ -238,6 +244,15 @@ All other non-comment lines are initially eligible for Markdown block parsing.
 ## 6. Directive Forms
 
 MarkTeX defines four directive families.
+
+This family is intentional:
+
+* `!#` denotes persistent document control,
+* `!@` denotes scoped control,
+* `!!@` denotes explicit scoped close,
+* `!$` denotes compile-time host execution.
+
+New control syntax should preferentially extend this family rather than introduce unrelated prefixes.
 
 ## 6.1 Persistent Directive
 
@@ -334,22 +349,45 @@ A mismatched close is a syntax error.
 !$ <python-code>
 ```
 
-This introduces compile-time host code.
+or:
 
-`!$` is line-introduced source code, not MOS.
+```text
+!$```[info-string]
+...
+!$```
+```
 
-Its body continues according to the implementation profile:
+These forms introduce compile-time host code.
 
-* single-line form MUST be supported,
-* indented or fenced multi-line form MAY be supported by a later profile,
-* the core surface grammar leaves multi-line statement blocks as an extension point.
+`!$` payloads are Python-host code, not MOS.
+
+The single-line form MUST be supported.
+The host-block form MUST be supported.
+
+In the host-block form:
+
+* the opener is `!$` followed by a backtick fence of length `N >= 3`,
+* the closer is `!$` followed by the same backtick fence length `N`,
+* the trailing opener text after the backticks is an optional info string,
+* ordinary Markdown fence closers do not terminate the block,
+* and the body is captured as host code text until the matching `!$` fence closer.
 
 Example:
 
-```marktex
+````marktex
 !$ x = 10
-!$ add_bib("extra.bib")
-```
+
+!$```python
+def add_note(s):
+    emit(Paragraph([Text("Note: "), Text(s)]))
+
+add_note("compiled from host code")
+!$```
+````
+
+Both forms normalize to executable host control nodes.
+Their difference is source shape and code payload span, not semantic phase.
+The host-block form is intentionally close to fenced-code syntax while remaining visually distinct from literal code blocks.
 
 ---
 
@@ -448,7 +486,7 @@ MOS is used in:
 * `!@ <mos>`
 * `[content](<mos>)`
 * `![alt](<mos>)`
-* `[^ <mos>]` in reference-definition or reference-control position
+* `[^ <mos>]` in citation-object position
 * any future schema-bound control payload position
 
 MOS is not used for:
@@ -866,19 +904,18 @@ Its precise interpretation depends on payload class.
 
 The core source-level classes are:
 
-1. **Reference definition**
-2. **Reference citation**
-3. **Reference control object**
+1. **Markdown footnote reference**
+2. **MarkTeX citation**
 
 Examples:
 
 ```marktex
-[^ Nobody06]
+[^ note1]
 [^ id: Nobody06; pages: 12-15 ]
-[^ @article{Nobody06, author: "Nobody Jr", title: "My Article", year: "2006"} ]
+[^ @Nobody06]
 ```
 
-The exact reference object taxonomy belongs to the bibliography/resource specification, but the surface parser MUST preserve these as distinct reference forms.
+The surface parser MUST preserve footnote and citation forms as distinct classes.
 
 ---
 
@@ -890,6 +927,7 @@ A paragraph is formed from one or more consecutive non-blank lines that are not 
 
 * directives,
 * code fences,
+* host blocks,
 * display math blocks,
 * headings,
 * list items,
@@ -903,6 +941,12 @@ Inline MarkTeX constructs inside paragraphs do not affect paragraph formation.
 ## 12. Directive/Markdown Boundary
 
 Directive recognition occurs before Markdown block parsing.
+
+The general law is:
+
+> explicit MarkTeX syntax takes precedence over Markdown syntax.
+
+Markdown is therefore the inherited residual layer, not a competing parser of equal priority.
 
 If, after stripping outer whitespace, a line consists of exactly one directive form beginning with `!#`, `!@`, `!!@`, or `!$`, it is a directive line, not a paragraph line.
 
@@ -945,6 +989,14 @@ The construct is resolved as MTX inline control iff all of the following hold:
 3. the resulting root object is valid in inline-style position,
 4. schema validation succeeds.
 
+The third and fourth conditions are binding/context conditions, not mere delimiter conditions.
+Thus a payload may be syntactically valid MOS yet still fail MTX interpretation because:
+
+* the root is not legal in inline-style position,
+* a field is unknown,
+* a tag lacks its prerequisite,
+* or schema binding otherwise fails.
+
 If so, the construct becomes an MTX inline control node.
 
 Example:
@@ -967,9 +1019,10 @@ Thus:
 
 ```marktex
 [OpenAI](https://openai.com)
+[Example](foo: bar)
 ```
 
-is not “almost MOS”; it is simply a Markdown link.
+are not “almost MOS”; they are simply Markdown links if MTX binding/context validation fails.
 
 ---
 
@@ -983,6 +1036,7 @@ Instead, it establishes a strict priority:
 2. otherwise Markdown.
 
 This is deliberate and fundamental.
+The same principle extends more broadly across the surface language: Markdown is inherited underneath MarkTeX rather than competing with it at the same precedence level.
 
 ---
 
@@ -1010,6 +1064,9 @@ The construct is resolved as MTX rich image control iff all of the following hol
 2. parsing consumes the payload completely,
 3. the resulting root object is valid in image-call position,
 4. schema validation succeeds.
+
+As with bracket-call resolution, syntactic MOS success alone is not sufficient.
+Binding or contextual illegality also triggers fallback.
 
 If so, the construct becomes an MTX image node carrying the source, local image patch, or both according to the image schema.
 
@@ -1041,32 +1098,52 @@ is simply a Markdown image if `logo.svg` does not form a valid MTX image payload
 
 The classifier is surface-level and deterministic.
 
-## 14.1 Citation Form
+## 14.1 Markdown Footnote Form
 
-If the payload is a simple reference key or schema-valid citation object, it is parsed as a citation.
+If the payload is a simple label key, it is parsed as a Markdown footnote reference.
 
 Examples:
 
 ```marktex
-[^ Nobody06]
-[^ id: Nobody06; pages: 12-15 ]
+[^ note1]
 ```
 
-## 14.2 Definition Form
+Separate footnote definition lines use Markdown-compatible block syntax:
 
-If the payload begins with a bibliography-entry introducer such as `@article`, `@book`, or another registered bibliography declaration marker, it is parsed as a reference definition.
+```marktex
+[^note1]: This is the footnote body.
+    This continuation line is still part of the same footnote.
+```
+
+Indented continuation lines belong to the same footnote-definition block.
+The footnote definition therefore behaves as a block construct rather than as a purely inline shell.
+
+## 14.2 Citation Form
+
+If the payload begins with `@` followed by a citation key, it is parsed as a MarkTeX citation shorthand.
 
 Example:
 
 ```marktex
-[^ @article{Nobody06, author: "Nobody Jr", title: "My Article", year: "2006"} ]
+[^ @Nobody06]
 ```
 
-## 14.3 Control/Object Form
+If the payload parses as a schema-valid citation object such as `id: Nobody06; pages: 12-15`, it is also parsed as a MarkTeX citation.
 
-If the payload parses as a schema-valid reference object but is neither a simple citation nor a bibliography entry declaration, it is preserved as a reference-control form.
+Example:
 
-The resource specification defines its meaning.
+```marktex
+[^ id: Nobody06; pages: 12-15 ]
+```
+
+Any other `[^ ... ]` payload class is invalid at the surface level.
+Document-level bibliography style, citation style, and bibliography sources belong to persistent `!#` configuration rather than inline reference syntax.
+
+MarkTeX citations are backend-facing semantic nodes.
+Their existence is not validated by the core frontend.
+
+Markdown footnote references and footnote definitions remain part of the surface document model.
+Implementations SHOULD cross-check that every referenced footnote label has a corresponding definition.
 
 ---
 
@@ -1289,9 +1366,10 @@ today = "[$ TIME.strftime(\"%Y-%m-%d\") ]"
 ## 20.9 Reference forms
 
 ```marktex
-[^ Nobody06]
+[^ note1]
 [^ id: Nobody06; pages: 12-15 ]
-[^ @article{Nobody06, author: "Nobody Jr", title: "My Article", year: "2006"} ]
+[^ @Nobody06]
+[^note1]: This is the footnote body.
 ```
 
 ---
@@ -1308,18 +1386,20 @@ The following are normative surface-level invariants.
 6. Dimension literals are scalar atoms, not tags.
 7. Transform tags may declare schema prerequisites, such as a required preset basis.
 8. `!!@` payloads are scope selectors, not MOS.
-9. `!$` payloads are Python-host code, not MOS.
+9. `!$` single-line and host-block payloads are Python-host code, not MOS.
 10. `[$ ... ]` is expression syntax, not MOS.
 11. `[content](payload)` is first parsed as a generic bracket-call.
 12. Bracket-call resolution prefers MTX iff full MOS and contextual validation succeed.
 13. `![alt](payload)` is first parsed as a generic image-call.
 14. Image-call resolution prefers MTX iff full MOS and contextual validation succeed.
 15. Otherwise bracket-call and image-call each fall back entirely to Markdown.
-16. Ordinary fenced code blocks are literal regions.
-17. Fenced code blocks whose info string contains `interp` enable only `[$ ... ]` in the fence body.
-18. `$ ... $` and `$$ ... $$` are delegated math regions, not MOS or Python-host syntax.
-19. MOS parsing and MOS validation are separate phases.
-20. Surface syntax is allowed to be expressive; semantic rigidity begins at normalization.
+16. `[^ ... ]` is dedicated reference syntax; bare labels are footnotes, while explicit `@key` and citation-object forms are MarkTeX citations.
+17. Ordinary fenced code blocks are literal regions.
+18. Fenced code blocks whose info string contains `interp` enable only `[$ ... ]` in the fence body.
+19. Host blocks opened by `!$` fences are executable regions, not literal code fences.
+20. `$ ... $` and `$$ ... $$` are delegated math regions, not MOS or Python-host syntax.
+21. MOS parsing and MOS validation are separate phases.
+22. Surface syntax is allowed to be expressive; semantic rigidity begins at normalization.
 
 ---
 
