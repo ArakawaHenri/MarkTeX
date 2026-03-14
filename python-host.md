@@ -129,6 +129,11 @@ or its structured equivalent in MOS-bearing contexts.
 
 An evaluation expression yields a value or node-like object that is then lifted into EIR.
 
+Python expression semantics are ordinary Python expression semantics as mediated by the host bridge.
+If an expression performs side effects through host-visible live objects, those effects are real.
+
+However, statement form remains the recommended style for stateful mutation because it is clearer in source.
+
 ---
 
 ## 5. Host Execution Model
@@ -367,25 +372,138 @@ Context-sensitive lifting MUST be deterministic and documented.
 
 ## 9. Intrinsic Objects
 
-Intrinsic objects are compiler-provided host-visible semantic proxies.
+Intrinsic objects are compiler-provided host-visible semantic objects.
 
-They are not required to be ordinary passive Python objects.
+They are not merely fake placeholders for later replacement.
+Depending on object kind, they may be:
 
-They may be:
-
-* immutable semantic views,
-* symbolic proxies,
-* smart collections,
-* operator-overloaded expression builders,
-* patch-producing objects.
+* live mutable compiler-owned state objects,
+* read-only symbolic engine-owned objects,
+* read-only symbolic stabilization-owned objects,
+* frozen concrete views,
+* smart resource collections,
+* operator-overloaded expression builders.
 
 The meaning of each intrinsic object is defined by the compiler, not by naive Python intuition.
 
 ---
 
-## 9.1 `PAGE`
+## 9.1 Declarative and Imperative Frontends
 
-`PAGE` is a symbolic page-state proxy.
+MarkTeX has two frontends onto one document-state system:
+
+* `!#` introduces declarative state changes in surface syntax,
+* `!$` may perform imperative state changes through live intrinsic objects.
+
+These are not separate semantic worlds.
+They are two frontends over the same typed state model.
+
+Thus:
+
+```marktex
+!# layout: width: 100
+```
+
+and:
+
+```marktex
+!$ LAYOUT.width = 100
+```
+
+are two ways to produce the same class of semantic state effect.
+
+When host code mutates a compiler-owned intrinsic, the mutation is real during EIR construction.
+The compiler MUST still record an equivalent typed state event or canonical patch form, with origin, so that diagnostics, replay, lowering, and tooling remain coherent.
+
+---
+
+## 9.2 Ownership Classes
+
+Each intrinsic object kind and each exposed intrinsic field MUST declare at least:
+
+1. owner class,
+2. host readability,
+3. host writability,
+4. resolution behavior,
+5. lowering behavior where relevant.
+
+The core ownership classes are:
+
+### Compiler-owned
+
+Examples:
+
+* `LAYOUT`
+* `MARGIN`
+* `COLUMN`
+* `HEADER`
+* `FOOTER`
+* `BIB`
+
+These may be live mutable host objects if the schema permits.
+
+### Engine-owned
+
+Examples:
+
+* `PAGE.N`
+* current-page parity
+* current running mark of the active page
+
+These are readable symbolic values, not writable host state.
+
+### Stabilization-owned
+
+Examples:
+
+* `PAGE.MAX`
+* page of a reference target
+
+These are readable symbolic values whose final concretization requires backend stabilization.
+
+### Frozen concrete
+
+Examples:
+
+* `TIME`
+
+These are concrete during host execution and ordinarily read-only.
+
+---
+
+## 9.3 Compiler-Owned Live Objects
+
+Compiler-owned intrinsics may be exposed as live semantic objects.
+
+If so:
+
+* reads observe the current compile-time document state,
+* writes mutate that state immediately in host evaluation order,
+* later host code sees the updated value,
+* the compiler records the mutation as a typed semantic state effect.
+
+Example:
+
+```python
+LAYOUT.width = 100
+MARGIN.top = 20
+```
+
+This is real mutation, not merely syntactic sugar.
+
+However, such mutation is valid only where:
+
+* the target field is declared writable,
+* the assigned value passes schema validation,
+* and the resulting state remains semantically valid.
+
+The implementation MUST reject writes to unknown fields, illegal fields, or invalid value shapes.
+
+---
+
+## 9.4 `PAGE`
+
+`PAGE` is a read-only symbolic page-state object.
 
 Typical attributes include:
 
@@ -394,11 +512,10 @@ Typical attributes include:
 * parity or side selectors if supported,
 * current page style markers.
 
-`PAGE.N` and `PAGE.MAX` are normally symbolic during EIR construction.
+`PAGE.N` is typically engine-owned.
+`PAGE.MAX` is typically stabilization-owned.
 
-They may be used in expressions.
-
-Example:
+They may be used in expressions:
 
 ```python id="3890cq"
 PAGE.MAX - PAGE.N
@@ -406,9 +523,17 @@ PAGE.MAX - PAGE.N
 
 This produces a symbolic expression if not concretely reducible.
 
+Writes such as:
+
+```python
+PAGE.N = 3
+```
+
+are invalid because `PAGE` fields are not host-writable.
+
 ---
 
-## 9.2 `TIME`
+## 9.5 `TIME`
 
 `TIME` is a compile-time temporal object.
 
@@ -435,9 +560,11 @@ The recommended rule is:
 
 This yields stable intra-run behavior.
 
+`TIME` is ordinarily read-only.
+
 ---
 
-## 9.3 `BIB`
+## 9.6 `BIB`
 
 `BIB` is a bibliography resource object.
 
@@ -447,23 +574,33 @@ It behaves as a smart resource collection and may support operators such as:
 
 * `+` for union-addition,
 * `-` for subtraction,
+* `+=` for live resource mutation if the host API exposes it,
 * membership or iteration if exposed by the host API.
 
-Example:
+Examples:
 
 ```python id="skhzlm"
 BIB + "extra.bib"
 ```
 
-This MUST construct a typed resource result, not perform raw string concatenation.
+and, if supported by the host API:
+
+```python
+BIB += "extra.bib"
+```
+
+The former constructs a typed resource result.
+The latter performs a real compiler-owned resource mutation and records the corresponding state effect.
+
+Neither may degrade into raw string concatenation.
 
 ---
 
-## 9.4 Layout and Style Intrinsics
+## 9.7 Layout and Style Intrinsics
 
-Objects such as `LAYOUT`, `MARGIN`, `COLUMN`, `HEADER`, and `FOOTER` may be exposed as semantic views, symbolic handles, constructors, or patch helpers depending on implementation strategy.
+Objects such as `LAYOUT`, `MARGIN`, `COLUMN`, `HEADER`, and `FOOTER` may be exposed as live compiler-owned semantic objects with field assignment, method update helpers, or both depending on implementation strategy.
 
-Their behavior MUST be documented per object.
+Their behavior MUST be documented per object and per field.
 
 They MUST NOT silently degrade into backend-specific text fragments.
 
@@ -569,6 +706,7 @@ Typical families include:
 * `patch.page(...)`
 * `patch.flow(...)`
 * `patch.text(...)`
+* `patch.object(...)`
 * `patch.resource(...)`
 
 Example:
@@ -669,6 +807,7 @@ Effects that alter the generated document through:
 * returned nodes,
 * returned patches,
 * resource registration,
+* direct mutation of compiler-owned intrinsic objects,
 * compiler-recognized host bindings.
 
 ### Extra-semantic effects
@@ -744,6 +883,8 @@ The core host error classes include:
 * invalid symbolic operation,
 * invalid constructor call,
 * schema-invalid patch produced by host code,
+* illegal write to a read-only intrinsic field,
+* schema-invalid intrinsic mutation,
 * context-invalid node returned into an incompatible position,
 * host exception raised during evaluation.
 
@@ -774,6 +915,20 @@ PAGE.MAX / PAGE.N
 ```
 
 is a compile-time error unless the host bridge explicitly supports that symbolic expression form.
+
+---
+
+## 15.3 Invalid Intrinsic Mutation Example
+
+If `PAGE.N` is read-only, then:
+
+```python
+PAGE.N = 3
+```
+
+is a compile-time host/state error, not a valid symbolic override.
+
+Likewise, if `LAYOUT.width` exists but rejects the assigned value shape, the assignment fails as a schema-invalid intrinsic mutation.
 
 ---
 
@@ -931,14 +1086,16 @@ The following are normative.
 
 1. Python executes only after NIR construction.
 2. Python does not participate in parsing or source disambiguation.
-3. Host-visible objects are semantic proxies, not naive raw strings unless documented as such.
+3. Host-visible objects are semantic objects, not naive raw strings unless documented as such.
 4. Only accepted result categories may enter EIR.
 5. Symbolic values may survive host evaluation.
 6. Context determines lifting of values into nodes.
 7. Host code may have arbitrary Python effects, but only MarkTeX-visible outputs alter document semantics.
 8. Style scope and host binding scope are distinct unless later unified by explicit language design.
 9. Typed constructors are the preferred bridge between Python and IR.
-10. EIR is the semantic output of host evaluation.
+10. Compiler-owned intrinsic mutation, if supported, is real host-time mutation and must be recorded as typed semantic state effect.
+11. Engine-owned and stabilization-owned symbolic intrinsics are readable but not writable.
+12. EIR is the semantic output of host evaluation.
 
 ---
 
@@ -959,10 +1116,10 @@ This keeps the host layer expressive without weakening the core language.
 ## 23. Final Principle
 
 The Python host is powerful because it is real Python.
-But MarkTeX remains coherent only if Python is treated as a producer of semantic objects rather than a side channel for textual tricks.
+But MarkTeX remains coherent only if the host still interacts with typed semantic objects and typed semantic state.
 
 The design law is therefore:
 
-> Python may be unrestricted, but its interface to MarkTeX must be typed.
+> Python may be unrestricted, and intrinsic mutation may be real, but the compiler must still own the typed semantic record of what happened.
 
-That is what lets the language remain programmable at the top while exact at the core.
+That is what lets the language remain script-like at the surface while exact at the core.

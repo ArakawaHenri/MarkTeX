@@ -97,6 +97,7 @@ EIR MUST:
 * evaluate `[$ ... ]` where possible,
 * expand macros and generated content,
 * materialize Python-produced document nodes,
+* materialize host-origin intrinsic mutations into typed semantic state effects,
 * preserve symbolic expressions that cannot yet be concretized.
 
 EIR is the authoritative semantic form for backend lowering.
@@ -178,6 +179,8 @@ Block =
   | ListBlock
   | QuoteBlock
   | CodeBlock
+  | InterpolatedCodeBlock
+  | MathBlock
   | TableBlock
   | RegionBlock
   | RawMarkdownBlock
@@ -204,6 +207,42 @@ Heading {
   origin: Origin
 }
 ```
+
+### CodeBlock
+
+```text
+CodeBlock {
+  info_string: CodeFenceInfo?,
+  body: String,
+  origin: Origin
+}
+```
+
+This is the normalized form of an ordinary fenced code block.
+Its body is literal text.
+
+### InterpolatedCodeBlock
+
+```text
+InterpolatedCodeBlock {
+  info_string: CodeFenceInfo?,
+  body: [LiteralChunk | ExprChunk],
+  origin: Origin
+}
+```
+
+This is the normalized form of a fenced code block whose info string contains the reserved flag `interp`.
+
+### MathBlock
+
+```text
+MathBlock {
+  payload: MathPayload,
+  origin: Origin
+}
+```
+
+This is the normalized form of delegated display math such as `$$ ... $$`.
 
 ### RegionBlock
 
@@ -232,6 +271,7 @@ Inline =
   | StyledSpan
   | Link
   | Image
+  | MathInline
   | InlineExpr
   | Citation
   | CrossRef
@@ -251,6 +291,35 @@ StyledSpan {
 ```
 
 This is the normalized form of MTX-style `[]()` inline control.
+
+### Image
+
+```text
+Image {
+  alt: InlineSeq,
+  resource: ResourceRef?,
+  patch: ObjectPatch?,
+  origin: Origin
+}
+```
+
+This is the normalized form of either:
+
+* Markdown image fallback,
+* or MTX rich image control from `![alt](payload)`.
+
+The exact image schema determines whether the source, local image patch, or both are present explicitly on the node.
+
+### MathInline
+
+```text
+MathInline {
+  payload: MathPayload,
+  origin: Origin
+}
+```
+
+This is the normalized form of delegated inline math such as `$ ... $`.
 
 ### InlineExpr
 
@@ -302,7 +371,8 @@ ScopedPatch {
 }
 ```
 
-This is the normalized form of `!@ ... !!@` or an equivalent region form.
+This is the normalized form of one expanded scoped declaration from `!@ ... !!@` or an equivalent region form.
+If one `!@` payload contains multiple top-level declarations separated by `;`, normalization first expands them into the same left-to-right stream that would result from multiple `!@` lines.
 
 ### EvalStmt
 
@@ -396,6 +466,7 @@ State =
   × PageState
   × FlowState
   × TextState
+  × ObjectState
   × ResourceState
   × EvalState
 ```
@@ -470,7 +541,22 @@ Examples:
 
 ---
 
-## 7.5 ResourceState
+## 7.5 ObjectState
+
+Occurrence-default state for schema-defined object families.
+
+Examples:
+
+* image defaults such as width, fit, and align,
+* figure defaults such as placement policy,
+* table defaults,
+* theorem/listing family defaults in later extensions.
+
+ObjectState exists so that extensible block and inline objects can reuse the same precedence and merge model as other stateful features without being forced into unrelated text or page partitions.
+
+---
+
+## 7.6 ResourceState
 
 Document resources and cross-document support.
 
@@ -485,7 +571,7 @@ Examples:
 
 ---
 
-## 7.6 EvalState
+## 7.7 EvalState
 
 Compile-time environment.
 
@@ -514,6 +600,7 @@ StatePatch =
   | PagePatch
   | FlowPatch
   | TextPatch
+  | ObjectPatch
   | ResourcePatch
 ```
 
@@ -535,6 +622,7 @@ Examples:
 * `layout`: `replace`
 * `margin.top`: `replace`
 * `header.left`: `slot-merge`
+* `image.width`: `replace`
 * `bib`: `union` and `subtract`
 * font routing tables: `domain-specific`
 
@@ -566,18 +654,19 @@ MOS is the canonical object notation of the surface language.
 Its role is not mere configuration convenience.
 Its role is to construct typed semantic objects.
 
-MOS MUST compile to typed objects, not to untyped maps.
+MOS MUST compile to typed semantic objects through ordered modifier application.
+It MUST NOT be treated as an unordered map literal.
 
 Examples:
 
 * `layout: A4, landscape` → `LayoutSpec`
 * `margin: top: 20` → `MarginPatch`
-* `w: font: "Times New Roman", 12pt` → `FontRoutePatch`
+* `w: font: "Times New Roman", size: 12pt` → `FontRoutePatch`
 * `header: left: "...", right: "..."` → `HeaderPatch`
 
 ### 9.1 Schema Registry
 
-MOS keys are resolved against a schema registry:
+MOS roots, fields, and tags are resolved against a schema registry:
 
 * core schema,
 * extension schema,
@@ -587,6 +676,79 @@ The grammar of MOS is fixed.
 Its vocabulary may be extended by schema registration.
 
 This preserves language stability while allowing domain extension.
+
+### 9.2 Ordered Modifier Application
+
+The normalized meaning of MOS is an ordered modifier stream.
+
+Within one modifier list:
+
+* groups normalize first,
+* then modifiers at the same level are applied left to right,
+* later modifiers may override earlier effects according to schema.
+
+This applies both:
+
+* inside one object's value list,
+* and across directive-level declaration streams separated by `;`.
+
+Example:
+
+```text
+layout: A4, width: 100, landscape
+```
+
+is interpreted as:
+
+1. apply `A4`,
+2. apply `width = 100`,
+3. apply `landscape`.
+
+If `A4` expands to width and height defaults, the later explicit width overrides only the width component unless the schema defines stronger replacement semantics.
+
+### 9.3 Binding Modes and Tags
+
+A schema may declare accepted modifiers using binding classes analogous to Python parameter modes:
+
+* positional-only,
+* keyword-only,
+* dual-use.
+
+Dimension literals are ordinary scalar atoms.
+They are not tags, but a schema may bind them positionally.
+
+Tags are zero-value modifier applications.
+They commonly correspond to keyword-only or dual-use schema parameters that permit omission of an explicit value.
+
+Useful tag families include:
+
+* preset tags such as `A4`, `A5`, `Letter`
+* transform tags such as `landscape`, `portrait`
+* enum/style tags such as `bold`, `italic`, `justify`, `contain`
+
+A tag may expand into one or more ordinary field assignments or other schema-defined effects.
+
+Thus `A4` may normalize into a paper preset, a width/height pair, or an equivalent typed object according to schema, after which later modifiers still apply in source order.
+
+Transform tags may additionally declare prerequisites.
+In the core layout schema, `landscape` and `portrait` require an active paper preset such as `A4`.
+
+Their role is to transform preset-derived orientation and dimensions, not to overwrite explicit user-provided width or height fields.
+
+Therefore:
+
+```text
+layout: A4, width: 100, landscape
+```
+
+normalizes to a layout object equivalent to:
+
+* `orientation = landscape`
+* `width = 100`
+* `height = 210`
+
+assuming `A4` begins as the portrait preset `210 × 297`.
+If no compatible preset is active, a transform tag such as `landscape` is a schema-binding error.
 
 ---
 
@@ -632,6 +794,40 @@ Fallback is whole-node, not partial.
 
 This rule is normative.
 There is no heuristic mixed mode.
+
+---
+
+## 10.4 `![...](...)` / Image-Call Resolution Rule
+
+The image-call form is intentionally overloaded in the same way as `[]()`.
+
+Any source construct of the shape:
+
+```text
+![alt](payload)
+```
+
+is first parsed as a generic `ImageCall`.
+
+No semantic commitment is made yet.
+
+### 10.4.1 Attempt MTX Rich-Image Interpretation
+
+The `payload` is parsed as MOS.
+
+The construct is resolved as MTX rich image control iff all of the following hold:
+
+1. the payload parses as valid MOS with full consumption,
+2. the resulting object is valid in image-call position,
+3. semantic validation succeeds for that object kind.
+
+If all three hold, the result is an `Image` node carrying the schema-defined source and local image patch semantics.
+
+### 10.4.2 Fallback
+
+Otherwise, the entire construct falls back to Markdown image interpretation.
+
+Fallback is whole-node, not partial.
 
 ---
 
@@ -736,23 +932,33 @@ Examples include:
 * `BIB`
 
 These are not required to be ordinary Python objects in the naive sense.
-They are semantic proxies with operator and attribute behavior defined by the compiler.
+They are semantic objects with operator and attribute behavior defined by the compiler.
 
 ### 13.1 Categories
 
 Intrinsic objects may be:
 
-* concrete snapshots,
-* symbolic proxies,
+* live compiler-owned state objects,
+* read-only symbolic engine-owned objects,
+* read-only symbolic stabilization-owned objects,
 * smart collections,
-* write-through state handles,
-* immutable semantic views.
+* frozen concrete views,
+* derived semantic views.
 
 Their behavior MUST be specified per object kind.
 
 ### 13.2 Example
 
 `BIB + "extra.bib"` should construct a valid `ResourcePatch` or equivalent typed object, not merely a raw string concatenation.
+
+If the host API exposes direct mutation, then:
+
+```python
+LAYOUT.width = 100
+```
+
+is a real host-time mutation of a compiler-owned intrinsic object.
+The compiler must still canonicalize its semantic effect into the IR-owned state record used for lowering and diagnostics.
 
 ---
 

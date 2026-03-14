@@ -92,12 +92,16 @@ Responsible for:
 * directive recognition,
 * Markdown block and inline parsing,
 * initial bracket-call capture,
+* initial image-call capture,
+* math-form capture,
+* fenced-block classification,
 * reference-form capture,
 * raw MOS payload capture.
 
 Not responsible for:
 
 * bracket-call semantic disambiguation,
+* image-call semantic disambiguation,
 * patch typing,
 * Python execution,
 * state resolution.
@@ -111,11 +115,14 @@ Produces normalized semantic IR.
 Responsible for:
 
 * resolving `[]()` into MTX inline control or Markdown fallback,
+* resolving `![...](...)` into MTX rich image control or Markdown fallback,
 * parsing MOS into typed semantic objects,
 * normalizing directives into explicit patches and regions,
+* expanding multi-declaration `!@` payloads into an explicit scoped declaration stream,
 * assigning patch lifetimes,
 * making scope structure explicit,
 * validating context legality,
+* normalizing interpolated fences and delegated math nodes,
 * preserving host expressions without executing them.
 
 Not responsible for:
@@ -136,6 +143,7 @@ Responsible for:
 * evaluating host expressions where possible,
 * materializing generated nodes,
 * constructing typed objects from host results,
+* materializing host-origin intrinsic mutations into typed semantic state effects,
 * reducing concrete expressions,
 * preserving symbolic expressions when concrete resolution is not yet possible.
 
@@ -240,17 +248,23 @@ This implies:
 * block classification
 * inline container structure
 * generic bracket-call capture
+* generic image-call capture
+* math-form capture
 * generic reference capture
+* fenced-block classification
 * directive family recognition
 
 ## 6.3 Must be decided by NIR
 
 * `[]()` MTX vs Markdown resolution
+* `![...](...)` MTX vs Markdown resolution
 * MOS parsing
 * patch typing
+* scoped declaration expansion for `!@`
 * patch lifetime assignment
 * scope-stack structure
 * field legality by position and lifetime
+* interpolated fence normalization
 * source-level ambiguity elimination
 
 ## 6.4 Must be decided by EIR

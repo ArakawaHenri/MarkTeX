@@ -320,7 +320,10 @@ Every intrinsic, expression, or constructed semantic value SHOULD expose a resol
 3. partial-evaluation permission,
 4. symbolic-preservation permission,
 5. lowering class,
-6. multi-pass requirement.
+6. multi-pass requirement,
+7. owner class where applicable,
+8. host readability,
+9. host writability.
 
 A conceptual form is:
 
@@ -331,7 +334,10 @@ ResolutionProfile {
   allow_partial_eval: Bool,
   allow_symbolic_preservation: Bool,
   lowering_class: LoweringClass,
-  requires_stabilization: Bool
+  requires_stabilization: Bool,
+  owner_class: OwnerClass?,
+  host_readable: Bool,
+  host_writable: Bool
 }
 ```
 
@@ -531,9 +537,9 @@ This separation prevents backend concerns from contaminating the semantic value 
 
 ## 10. Phase-Bound Intrinsics
 
-Intrinsic objects SHOULD be modeled as **phase-bound intrinsics**.
+Intrinsic objects SHOULD be modeled as **phase-bound owned intrinsics**.
 
-A phase-bound intrinsic is an intrinsic object whose value-resolution behavior is explicitly tied to one or more phases.
+A phase-bound owned intrinsic is an intrinsic object whose value-resolution and host-access behavior are explicitly tied to one or more phases and one owner class.
 
 Examples:
 
@@ -544,6 +550,13 @@ Examples:
 * `FOOTER`
 
 Each intrinsic object kind must define its resolution behavior.
+
+The core owner classes are:
+
+* `compiler`
+* `engine`
+* `stabilization`
+* `frozen`
 
 ---
 
@@ -556,6 +569,9 @@ Recommended profile:
 * symbolic preservation: normally no
 * lowering class: none once reduced
 * stabilization: no
+* owner class: `frozen`
+* host readable: yes
+* host writable: no
 
 `TIME` is best modeled as a compile-start-frozen value.
 
@@ -571,6 +587,9 @@ Recommended profile:
 * symbolic preservation: yes
 * lowering class: current-page placeholder
 * stabilization: no
+* owner class: `engine`
+* host readable: yes
+* host writable: no
 
 ---
 
@@ -584,6 +603,9 @@ Recommended profile:
 * symbolic preservation: yes
 * lowering class: total-pages placeholder
 * stabilization: yes
+* owner class: `stabilization`
+* host readable: yes
+* host writable: no
 
 ---
 
@@ -596,8 +618,45 @@ Recommended profile:
 * symbolic preservation: sometimes, depending on bibliography strategy
 * lowering class: resource-lowering strategy
 * stabilization: backend-dependent for numbering and formatting
+* owner class: `compiler`
+* host readable: yes
+* host writable: yes if the host API exposes mutation
 
 This illustrates that some intrinsics are mixed-phase objects, not pure compile-time scalars.
+
+---
+
+## 10.5 `LAYOUT.width`
+
+Recommended profile:
+
+* value kind: concrete or mixed object subfield
+* earliest resolution phase: usually `ExpandPhase`
+* symbolic preservation: usually no
+* lowering class: page-layout lowering strategy
+* stabilization: no
+* owner class: `compiler`
+* host readable: yes
+* host writable: yes
+
+This is a typical compiler-owned live field.
+
+---
+
+## 10.6 Owner-Class Rule
+
+Owner class governs host mutability:
+
+* compiler-owned fields may be mutated during host execution if their schema declares them writable,
+* engine-owned and stabilization-owned fields are readable symbolic handles, not writable state,
+* frozen values are readable but ordinarily immutable.
+
+Thus:
+
+* `LAYOUT.width = 100` may be valid,
+* `PAGE.N = 3` is invalid,
+* `PAGE.MAX = 12` is invalid,
+* `TIME.year = 2027` is ordinarily invalid.
 
 ---
 
@@ -859,14 +918,15 @@ should become an interpolated value or inline node sequence, not a prematurely f
 
 ## 18. Host Object vs IR Object
 
-Python host objects are not the semantic source of truth.
+Python host objects are not the final semantic source of truth.
 
 They may serve as:
 
 * builders,
-* proxies,
+* live intrinsic objects,
+* symbolic handles,
 * operator-overloaded constructors,
-* symbolic wrappers.
+* smart resource collections.
 
 But before or during EIR construction, they MUST be canonicalized into IR-level value forms.
 
@@ -914,7 +974,7 @@ The main value-resolution error classes are:
 3. illegal symbolic field insertion
 4. non-lowerable deferred value
 5. invalid mixed-type composition
-6. invalid host proxy escaping canonicalization
+6. invalid host object escaping canonicalization
 
 ---
 

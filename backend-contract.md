@@ -460,6 +460,7 @@ Inline lowering responsibilities include:
 * text emission,
 * style span entry/exit,
 * script/font routing,
+* math-node lowering,
 * symbolic inline insertion,
 * link and citation lowering,
 * inline raw backend escapes.
@@ -492,6 +493,21 @@ What matters normatively is:
 
 ---
 
+## 13.3 Math Lowering
+
+MarkTeX math nodes are opaque math-bearing semantic nodes.
+
+They are not ordinary raw TeX escapes, even if their payload is ultimately emitted to a TeX math-capable backend with minimal transformation.
+
+The backend contract therefore distinguishes:
+
+* explicit raw backend escape nodes,
+* and dedicated math nodes whose payload is preserved but whose role in the IR remains typed.
+
+This distinction is important for diagnostics, tooling, and future backend portability.
+
+---
+
 ## 14. Resource Lowering
 
 ResourceState lowers through dedicated backend strategies.
@@ -502,7 +518,7 @@ Typical classes include:
 * labels
 * counters
 * cross-references
-* assets
+* assets, including image resources
 
 Resource lowering MUST remain typed until the backend strategy is selected.
 

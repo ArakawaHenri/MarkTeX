@@ -27,7 +27,7 @@ It is part of the language.
 
 The central law is:
 
-> State is modified only by typed patches, and every patch has a declared lifetime.
+> State is modified only through typed state updates, and every such update has a declared lifetime.
 
 MarkTeX therefore rejects:
 
@@ -35,6 +35,8 @@ MarkTeX therefore rejects:
 * ad hoc dictionary merging,
 * backend-dependent accidental state semantics,
 * and implicit precedence by parser order alone.
+
+Declarative patches and imperative host-side intrinsic mutation are two frontends onto this same typed update system.
 
 All state transitions MUST be representable in the IR.
 
@@ -50,6 +52,7 @@ State =
   × PageState
   × FlowState
   × TextState
+  × ObjectState
   × ResourceState
   × EvalState
 ```
@@ -139,11 +142,27 @@ Typical fields include:
 * script-sensitive text routing,
 * inline language hints.
 
-TextState is the primary domain for inline patches.
+TextState is the primary domain for inline text patches.
+ObjectState may additionally define inline-capable local defaults for schema-defined object families.
 
 ---
 
-## 3.5 ResourceState
+## 3.5 ObjectState
+
+ObjectState contains occurrence-default state for schema-defined object families.
+
+Typical fields include:
+
+* image defaults such as width, fit, align, and frame,
+* figure defaults such as placement policy,
+* table family defaults,
+* listing or theorem family defaults in later extensions.
+
+ObjectState exists so that extensible document objects can participate in the same persistent/scoped/inline precedence system without being forced into unrelated page, flow, or text partitions.
+
+---
+
+## 3.6 ResourceState
 
 ResourceState contains document resources and reference-support state.
 
@@ -160,7 +179,7 @@ ResourceState may influence both expansion and backend lowering.
 
 ---
 
-## 3.6 EvalState
+## 3.7 EvalState
 
 EvalState contains compile-time host environment state.
 
@@ -207,6 +226,7 @@ StatePatch =
   | PagePatch
   | FlowPatch
   | TextPatch
+  | ObjectPatch
   | ResourcePatch
   | CompositePatch
 ```
@@ -220,6 +240,9 @@ CompositePatch {
 A patch MUST be schema-valid before it may enter NIR.
 
 A patch MUST identify its target partition and field set explicitly, whether directly or by schema-bound object construction.
+
+Patch construction may originate from an ordered modifier stream rather than from a preassembled object literal.
+When it does, modifier application order is part of semantics, not an implementation detail.
 
 ---
 
@@ -238,9 +261,48 @@ margin: top: 20
 does not replace the entire margin object unless the schema says otherwise.
 It replaces only the `top` subfield of the page margin structure.
 
+Modifier order still matters inside the patch that produced it.
+If a schema-defined tag or earlier field assignment contributes values that are later overwritten by explicit fields, the later fields win according to the schema's ordered application law before lifetime precedence is considered.
+
 ---
 
-## 5.2 Patch Origin
+## 5.2 Ordered Modifier Application
+
+Within one patch-producing modifier stream, application is source-ordered.
+
+The rule is:
+
+* grouped modifiers normalize first,
+* then sibling modifiers at the same level apply left to right,
+* later modifiers may override earlier effects on the same field.
+
+This applies uniformly whether the target partition is:
+
+* `TextState`,
+* `ObjectState`,
+* `FlowState`,
+* `PageState`,
+* or another schema-defined patch family.
+
+Thus image settings, text settings, and layout settings all participate in the same ordered modifier language.
+
+Example:
+
+```text
+layout: A4, width: 100, landscape
+```
+
+If the schema defines `A4` as a preset tag that supplies the portrait dimensions `210 × 297`, then:
+
+* `width: 100` establishes an explicit width override,
+* `landscape` rotates only the preset-derived component,
+* the resulting effective layout is `orientation = landscape`, `width = 100`, `height = 210`.
+
+If a transform tag such as `landscape` appears without a compatible preset basis, schema binding fails before ordinary lifetime precedence is considered.
+
+---
+
+## 5.3 Patch Origin
 
 Every patch MUST carry origin information.
 
@@ -250,6 +312,30 @@ This is necessary for:
 * scope tracing,
 * precedence inspection,
 * tooling and explanation.
+
+---
+
+## 5.4 Host-Origin Mutation
+
+During EIR construction, compiler-owned intrinsic objects may be mutated directly by host code.
+
+Such mutation is real host-time state mutation, not merely a UI illusion.
+
+However, every semantically visible mutation MUST also be recorded as an equivalent typed state effect with:
+
+* target field or object path,
+* validated value or operation,
+* lifetime,
+* origin,
+* and ordering position.
+
+This rule preserves:
+
+* provenance,
+* replayability,
+* diagnostics,
+* deterministic lowering,
+* and tooling introspection.
 
 ---
 
@@ -463,6 +549,16 @@ Typical examples:
 
 Domain-specific merge behavior MUST be explicitly documented per field.
 
+Tag expansion is also schema-specific.
+A tag may:
+
+* assign one field,
+* assign several fields,
+* select one preset object,
+* or invoke another schema-defined modifier effect.
+
+Once expanded, its contributions participate in the ordinary ordered modifier and merge law system.
+
 ---
 
 ## 9. Defaults
@@ -614,6 +710,9 @@ Typical non-inline-legal fields:
 * bibliography set,
 * header/footer definitions.
 
+Inline-capable object families may additionally define inline-legal local fields through ObjectState schemas.
+Typical examples include image width, fit, align, or frame overrides on a single inline image occurrence.
+
 A syntactically valid MOS object that targets non-inline-legal fields fails contextual validation in inline position.
 
 ---
@@ -678,10 +777,35 @@ Typical examples:
 | column.count |        yes |             yes |     no |
 | font.size    |        yes |             yes |    yes |
 | color        |        yes |             yes |    yes |
+| image.width  |        yes |             yes |    yes |
+| image.fit    |        yes |             yes |    yes |
 | bib set      |        yes | yes, if allowed |     no |
 | header.right |        yes |    possibly yes |     no |
 
 If a patch targets a field in an illegal lifetime context, normalization or validation MUST reject it.
+
+---
+
+## 14.1 Ownership and Host Writability
+
+State-bearing intrinsic fields MUST also declare ownership and host writability.
+
+The core ownership classes are:
+
+* compiler-owned,
+* engine-owned,
+* stabilization-owned,
+* frozen concrete.
+
+Typical examples:
+
+* `LAYOUT.width`: compiler-owned, host-readable, host-writable
+* `BIB`: compiler-owned, host-readable, host-writable if the host API exposes mutation
+* `PAGE.N`: engine-owned, host-readable, not host-writable
+* `PAGE.MAX`: stabilization-owned, host-readable, not host-writable
+* `TIME.year`: frozen concrete, host-readable, ordinarily not host-writable
+
+If host code attempts to write a non-writable field, compilation fails as a host/state error at the earliest correct phase.
 
 ---
 
@@ -982,6 +1106,26 @@ Semantics:
 * footer content is valid persistent `PageState`,
 * `PAGE.N` and `PAGE.MAX` remain symbolic through EIR,
 * TIR lowers them to backend-resolved runtime placeholders.
+
+---
+
+## 22.6 Object defaults with local override
+
+Source:
+
+```marktex id="a0q2p9"
+!# image: width: 0.8, fit: contain
+!@ image: align: center
+![arch](src: "figures/arch.pdf", width: 0.6)
+!!@ image
+```
+
+Semantics:
+
+* image defaults live in `ObjectState`,
+* scoped `image.align = center` overrides any outer image default inside the scope,
+* the image occurrence's local `width = 0.6` overrides ambient image width for that node only,
+* after scope exit, only persistent image defaults remain.
 
 ---
 
