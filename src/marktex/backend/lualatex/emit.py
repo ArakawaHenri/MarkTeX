@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from marktex.backend.lualatex.bibliography import LuaLaTeXBibliography, bibliography_summary
 from marktex.core import (
     Citation,
     CodeBlock,
@@ -34,6 +35,7 @@ def make_backend_ir(document: Document) -> dict[str, object]:
         "target": "lualatex",
         "events": [object_to_json(event) for event in document.events],
         "blocks": [object_to_json(block) for block in document.blocks],
+        "bibliography": bibliography_summary(document),
     }
 
 
@@ -47,6 +49,7 @@ class LuaLaTeXEmitter:
         self.footnotes: Mapping[str, FootnoteDefinition] = {
             footnote.label: footnote for footnote in document.footnotes
         }
+        self.bibliography = LuaLaTeXBibliography(document, escape_latex, escape_url)
 
     def emit(self) -> str:
         geometry_options = layout_options(self.document)
@@ -71,6 +74,11 @@ class LuaLaTeXEmitter:
         for block in self.document.blocks:
             body.extend(self.emit_block(block))
             body.append("")
+        references = self.bibliography.reference_lines()
+        if references:
+            body.extend(references)
+            body.append("")
+
         return "\n".join(preamble + body + [r"\end{document}", ""])
 
     def emit_block(self, block: object) -> list[str]:
@@ -199,12 +207,7 @@ class LuaLaTeXEmitter:
         if isinstance(node, FootnoteRef):
             return self.emit_footnote_ref(node, context, deferred_footnotes)
         if isinstance(node, Citation):
-            key_text = ", ".join(node.keys)
-            if node.kwargs:
-                suffix = "; " + ", ".join(f"{key}={value}" for key, value in node.kwargs.items())
-            else:
-                suffix = ""
-            return r"\textsuperscript{[" + escape_latex(key_text + suffix) + "]}"
+            return self.bibliography.cite(node, context, deferred_footnotes)
         raise MarkTeXError(f"unsupported inline node for LuaLaTeX backend: {node!r}")
 
     def emit_footnote_ref(

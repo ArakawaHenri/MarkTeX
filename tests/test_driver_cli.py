@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 import marktex
+from marktex.bibliography import parse_bibtex_file, parse_bibliography_style, parse_citation_style
 from marktex.driver import ArtifactKind, compile_file
 from marktex.driver.compiler import build_document
 from marktex.source import MarkTeXError
@@ -183,13 +184,134 @@ class DriverTests(unittest.TestCase):
         self.assertIn(r"\includegraphics{logo.png}", build.tex)
 
     def test_footnote_and_citation_lower(self) -> None:
-        build = build_document(
-            "Claim[^note] and cite [^ cite: Knuth84, pages=12-15 ].\n\n"
-            "[^note]: Footnote body.\n",
-            filename="test.mtx",
-        )
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@book{Knuth84,\n"
+                "  author = {Donald Knuth},\n"
+                "  title = {The TeXbook},\n"
+                "  year = {1984},\n"
+                "  publisher = {Addison-Wesley}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n"
+                "Claim[^note] and cite [^ cite: Knuth84, pages=12-15 ].\n\n"
+                "[^note]: Footnote body.\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
         self.assertIn(r"\footnote{Footnote body.}", build.tex)
-        self.assertIn(r"\textsuperscript{[Knuth84; pages=12-15]}", build.tex)
+        self.assertIn("[1]", build.tex)
+        self.assertIn(r"\section*{References}", build.tex)
+        self.assertIn("Donald Knuth", build.tex)
+
+    def test_markdown_footnote_and_note_citation_are_distinct(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@article{Turing36,\n"
+                "  author = {Alan Turing},\n"
+                "  title = {On Computable Numbers},\n"
+                "  journal = {Proceedings of the London Mathematical Society},\n"
+                "  year = {1936}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n"
+                "!# citestyle: chicago-notes\n"
+                "Footnote[^note] and citation [^ cite: Turing36 ].\n\n"
+                "[^note]: Markdown footnote body.\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn(r"\footnote{Markdown footnote body.}", build.tex)
+        self.assertIn(r"\footnote{Alan Turing. On Computable Numbers. 1936.}", build.tex)
+
+    def test_table_cell_note_citation_is_deferred_after_tabular(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@article{Turing36, author={Alan Turing}, title={On Computable Numbers}, year={1936}}\n",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n"
+                "!# citestyle: chicago-notes\n"
+                "+++ A | B\n"
+                "Ref | Status\n"
+                "[^ cite: Turing36 ] | ok\n"
+                "+++\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn(r"\footnotemark & ok \\", build.tex)
+        self.assertIn(r"\stepcounter{footnote}\footnotetext{Alan Turing. On Computable Numbers. 1936.}", build.tex)
+
+    def test_citation_missing_bibliography_entry_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text("", encoding="utf-8")
+            source = directory / "paper.mtx"
+            source.write_text("!# bib: refs.bib\nSee [^ cite: Missing ].\n", encoding="utf-8")
+            with self.assertRaisesRegex(MarkTeXError, "undefined bibliography entry: Missing"):
+                build_document(source.read_text(encoding="utf-8"), filename=str(source))
+
+    def test_custom_bibliography_style_can_include_uncited_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@book{Knuth84, author={Donald Knuth}, title={The TeXbook}, year={1984}}\n",
+                encoding="utf-8",
+            )
+            (directory / "all.mtxbs").write_text(
+                "style: name=all; "
+                "references: title=`All Sources`, include=all, sort=key, placement=inline, label=key; "
+                "template: default, author, title, year;\n",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text("!# bib: refs.bib\n!# bibstyle: all.mtxbs\nNo cite.\n", encoding="utf-8")
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn(r"\section*{All Sources}", build.tex)
+        self.assertIn("[Knuth84]", build.tex)
+
+    def test_bibtex_parser_reads_common_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "refs.bib"
+            path.write_text(
+                "@article{Turing36,\n"
+                "  author = {Alan Turing},\n"
+                "  title = {On {Computable} Numbers},\n"
+                "  year = \"1936\"\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            entry = parse_bibtex_file(path)[0]
+        self.assertEqual(entry.key, "Turing36")
+        self.assertEqual(entry.entry_type, "article")
+        self.assertEqual(entry.fields["title"], "On Computable Numbers")
+
+    def test_style_parsers_read_mos_style_files(self) -> None:
+        citation = parse_citation_style(
+            "style: name=custom; citation: mode=author-page, form=paren, locator-prefix=` `;",
+            "custom.mtxcs",
+        )
+        bibliography = parse_bibliography_style(
+            "style: name=custom; "
+            "references: title=Sources, include=all, sort=key, placement=inline, label=key; "
+            "template: default, author, title;",
+            "custom.mtxbs",
+        )
+        self.assertEqual(citation.mode, "author-page")
+        self.assertEqual(citation.locator_prefix, " ")
+        self.assertEqual(bibliography.include, "all")
+        self.assertEqual(bibliography.templates["default"], ("author", "title"))
 
     def test_table_cell_footnote_is_deferred_after_tabular(self) -> None:
         build = build_document(

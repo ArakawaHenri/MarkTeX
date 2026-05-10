@@ -1,0 +1,10 @@
+# Custom Citation Style
+
+!# bib: references.bib
+!# citestyle: styles/author-page.mtxcs
+!# bibstyle: styles/all-sources.mtxbs
+
+Custom styles are regular MarkTeX style files. This citation uses an author-page
+format [^ cite: Turing36, pages=230-265 ] while the bibliography style chooses
+to include every active BibTeX entry.
+
