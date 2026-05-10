@@ -1,0 +1,76 @@
+!# layout: A4, landscape
+!# margin: top=24mm, bottom=20mm
+!# bib: references.bib
+!# bib+: supplemental.bib
+!# bibstyle: numeric
+!# citestyle: superscript
+
+$$$
+title = "Comprehensive MarkTeX 0.1 Feature Smoke"
+author = "Ada Lovelace"
+status = "ready"
+show_extra = True
+score = 41
+$$$
+
+# [$ title ]
+
+Prepared by [$ author ]. This page is [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ].
+
+This paragraph covers *emphasis*, **strong text**, `inline code`, a
+[project link](https://example.com/marktex), an image placeholder
+![MarkTeX logo](examples/assets/logo.pdf), a footnote reference[^overview], and a citation
+reference [^ cite: Knuth84, pages=12-15 ].
+
+This paragraph uses a source line continuation \
+to remain one paragraph while testing physical-line joining.
+
+これは日本語と English mixed text です。LuaLaTeX-oriented output keeps CJK text in the document.
+
+## Inline Content In *Headings* And `Code`
+
+The compiler evaluates concrete host expressions like [$ score + 1 ] and
+preserves page placeholders as backend-aware inline objects.
+
+!@ body: font=Times New Roman, size=11pt
+
+Scoped text remains ordinary document content in 0.1, while the scope push and
+close are visible in EIR state logs.
+
+!? [$ show_extra ]
+This concrete conditional branch is selected.
+!?!? [$ False ]
+This else-if branch is not selected.
+!?!
+This else branch is not selected.
+!!?
+
+!? [$ PAGE.CURRENT == PAGE.TOTAL ]
+This symbolic page conditional lowers to a LuaLaTeX page/last-page test.
+!!?
+
+!!@ body
+
+## Code Fences
+
+```python
+def add(left, right):
+    return left + right
+```
+
+```$python
+print("Title: [$ title ]")
+print("Current page placeholder: [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ]")
+```
+
+## Rich Table With Inline Cells
+
++++ align=left | align=right | align=left
+Feature | Example | Status
+Inline markup | *em* and **strong** | [$ status ]
+Literal pipe | A \| B | escaped
+Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
++++
+
+[^overview]: Footnotes are single-line definitions in MarkTeX 0.1.
+[^table-note]: Footnotes may be referenced from rich table cells.
