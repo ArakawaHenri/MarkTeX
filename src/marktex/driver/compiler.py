@@ -11,6 +11,9 @@ from marktex.backend.lualatex import emit_lualatex, make_backend_ir
 from marktex.core import (
     Citation,
     CodeBlock,
+    CodeExpression,
+    CodePart,
+    CodeText,
     Conditional,
     ConditionalBranch,
     Document,
@@ -229,8 +232,12 @@ def build_document(
                 )
             )
         elif isinstance(node, CodeFenceNode):
-            body = render_interpolated_text(node.body, host, node.origin, source) if node.interpolated else node.body
-            append_block(CodeBlock(node.language, body, node.interpolated, node.origin))
+            if node.interpolated:
+                body, parts = render_interpolated_code(node.body, host, node.origin, source)
+            else:
+                body = node.body
+                parts = ()
+            append_block(CodeBlock(node.language, body, node.interpolated, node.origin, parts))
         elif isinstance(node, RichTableNode):
             rows = node.rows
             columns = tuple(column_call(spec, filename, registry) for spec in node.column_specs)
@@ -457,16 +464,31 @@ def reference_node(payload: str, origin: SourceSpan, *, strict: bool) -> Footnot
     raise MarkTeXError(f"unsupported reference payload: {payload}", origin)
 
 
-def render_interpolated_text(text: str, host: PythonHost, origin: SourceSpan, source: str) -> str:
+def render_interpolated_code(
+    text: str,
+    host: PythonHost,
+    origin: SourceSpan,
+    source: str,
+) -> tuple[str, tuple[CodePart, ...]]:
     pieces: list[str] = []
+    parts: list[CodePart] = []
     last = 0
     for match in re.finditer(r"\[\$\s*(.*?)\s*\]", text):
-        pieces.append(text[last : match.start()])
-        value = host.eval_expr(match.group(1), offset_span(origin, match.start(), match.end(), source))
+        if match.start() > last:
+            raw = text[last : match.start()]
+            pieces.append(raw)
+            parts.append(CodeText(raw, offset_span(origin, last, match.start(), source)))
+        expr_origin = offset_span(origin, match.start(), match.end(), source)
+        expr_source = match.group(1)
+        value = host.eval_expr(expr_source, expr_origin)
         pieces.append(symbolic_text(value))
+        parts.append(CodeExpression(expr_source, value, expr_origin))
         last = match.end()
-    pieces.append(text[last:])
-    return "".join(pieces)
+    if last < len(text):
+        raw = text[last:]
+        pieces.append(raw)
+        parts.append(CodeText(raw, offset_span(origin, last, len(text), source)))
+    return "".join(pieces), tuple(parts)
 
 
 def symbolic_text(value: object) -> str:

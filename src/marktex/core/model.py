@@ -167,11 +167,39 @@ class Heading:
 
 
 @dataclass(frozen=True)
+class CodeText:
+    value: str
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {"kind": "code_text", "value": self.value, "origin": _origin(self.origin)}
+
+
+@dataclass(frozen=True)
+class CodeExpression:
+    source: str
+    value: Any
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "kind": "code_expr",
+            "source": self.source,
+            "value": object_to_json(self.value),
+            "origin": _origin(self.origin),
+        }
+
+
+CodePart: TypeAlias = CodeText | CodeExpression
+
+
+@dataclass(frozen=True)
 class CodeBlock:
     language: str
     body: str
     interpolated: bool = False
     origin: SourceSpan | None = None
+    parts: tuple[CodePart, ...] = ()
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -179,6 +207,7 @@ class CodeBlock:
             "language": self.language,
             "body": self.body,
             "interpolated": self.interpolated,
+            "parts": [part.to_json() for part in self.parts],
             "origin": _origin(self.origin),
         }
 

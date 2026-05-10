@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from marktex.core import (
     Citation,
     CodeBlock,
+    CodeExpression,
+    CodeText,
     Conditional,
     Document,
     DocumentPatch,
@@ -96,7 +98,22 @@ class LuaLaTeXEmitter:
         return "\\" + command + "{" + self.emit_inline_children(children) + "}"
 
     def emit_code_block(self, block: CodeBlock) -> list[str]:
-        return [r"\begin{verbatim}", block.body.rstrip("\n"), r"\end{verbatim}"]
+        if not block.interpolated or not block.parts:
+            return [r"\begin{verbatim}", block.body.rstrip("\n"), r"\end{verbatim}"]
+        body = "".join(self.emit_code_part(part) for part in block.parts).rstrip("\n")
+        return [
+            r"\par\noindent\begingroup",
+            r"\ttfamily\obeyspaces\obeylines",
+            body,
+            r"\par\endgroup",
+        ]
+
+    def emit_code_part(self, part: object) -> str:
+        if isinstance(part, CodeText):
+            return escape_plain_latex(part.value)
+        if isinstance(part, CodeExpression):
+            return expression_value_to_lualatex(part.value, part.source, part.origin)
+        raise MarkTeXError(f"unsupported code part for LuaLaTeX backend: {part!r}")
 
     def emit_table(self, table: Table) -> list[str]:
         column_count = len(table.header)

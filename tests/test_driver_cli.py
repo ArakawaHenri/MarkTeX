@@ -81,12 +81,29 @@ class DriverTests(unittest.TestCase):
         self.assertIn(r"\thepage{}", build.tex)
         self.assertIn(r"\pageref{LastPage}", build.tex)
 
+    def test_interpolated_code_block_page_placeholder_lowers_to_lualatex(self) -> None:
+        build = build_document(
+            "```$python\nprint('page [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ]')\n```\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\ttfamily\obeyspaces\obeylines", build.tex)
+        self.assertIn(r"\thepage{}", build.tex)
+        self.assertIn(r"\pageref{LastPage}", build.tex)
+        self.assertNotIn("PAGE.CURRENT", build.tex)
+
     def test_unsupported_symbolic_expression_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("Remaining [$ PAGE.TOTAL - PAGE.CURRENT ].\n", encoding="utf-8")
             with self.assertRaises(MarkTeXError):
                 compile_file(source)
+
+    def test_interpolated_code_block_unsupported_symbolic_expression_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported symbolic expression"):
+            build_document(
+                "```$python\nprint([$ PAGE.TOTAL - PAGE.CURRENT ])\n```\n",
+                filename="test.mtx",
+            )
 
     def test_symbolic_bool_coercion_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
