@@ -174,6 +174,35 @@ class DriverTests(unittest.TestCase):
         self.assertIn(r"\footnote{Footnote body.}", build.tex)
         self.assertIn(r"\textsuperscript{[Knuth84; pages=12-15]}", build.tex)
 
+    def test_table_cell_footnote_is_deferred_after_tabular(self) -> None:
+        build = build_document(
+            "+++ A | B\nHeader | Value\nCell[^note] | ok\n+++\n\n"
+            "[^note]: Table footnote body.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"Cell\footnotemark & ok \\", build.tex)
+        self.assertIn(r"\addtocounter{footnote}{-1}", build.tex)
+        self.assertIn(r"\stepcounter{footnote}\footnotetext{Table footnote body.}", build.tex)
+
+    def test_multiple_table_cell_footnotes_defer_in_source_order(self) -> None:
+        build = build_document(
+            "+++ A | B\nHeader | Value\nFirst[^a] | Second[^b]\n+++\n\n"
+            "[^a]: First note.\n"
+            "[^b]: Second note.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\addtocounter{footnote}{-2}", build.tex)
+        first = build.tex.index(r"\stepcounter{footnote}\footnotetext{First note.}")
+        second = build.tex.index(r"\stepcounter{footnote}\footnotetext{Second note.}")
+        self.assertLess(first, second)
+
+    def test_table_cell_undefined_footnote_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "undefined footnote: missing"):
+            build_document(
+                "+++ A\nHeader\nCell[^missing]\n+++\n",
+                filename="test.mtx",
+            )
+
     def test_no_host_allows_literals_and_page_placeholders(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
