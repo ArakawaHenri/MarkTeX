@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from marktex.source import MarkTeXError, SourceSpan
+from marktex.surface.grammar import FOOTNOTE_DEFINITION_RE
 from marktex.surface.model import (
     CodeFenceNode,
     ConditionalNode,
@@ -19,7 +20,7 @@ from marktex.surface.model import (
 )
 
 
-def parse_surface(source: str, *, filename: str, strict: bool = False) -> SurfaceDocument:
+def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
     lines = source.splitlines(keepends=True)
     nodes: list[SurfaceNode] = []
     paragraph: list[str] = []
@@ -44,7 +45,7 @@ def parse_surface(source: str, *, filename: str, strict: bool = False) -> Surfac
 
         if stripped_newline.startswith("```"):
             flush_paragraph(line_start)
-            fence_node, index, offset = parse_code_fence(lines, index, offset, source, filename, strict=strict)
+            fence_node, index, offset = parse_code_fence(lines, index, offset, source, filename)
             nodes.append(fence_node)
             continue
 
@@ -54,7 +55,7 @@ def parse_surface(source: str, *, filename: str, strict: bool = False) -> Surfac
             nodes.append(host_node)
             continue
 
-        footnote = re.match(r"^\[\^([A-Za-z0-9_.:-]+)\]:\s*(.*)$", stripped_newline)
+        footnote = FOOTNOTE_DEFINITION_RE.match(stripped_newline)
         if footnote:
             flush_paragraph(line_start)
             nodes.append(
@@ -175,8 +176,6 @@ def parse_code_fence(
     offset: int,
     source: str,
     filename: str,
-    *,
-    strict: bool = False,
 ) -> tuple[CodeFenceNode, int, int]:
     opener = lines[index].rstrip("\n")
     fence = re.match(r"^(`{3,})(.*)$", opener)
@@ -184,11 +183,6 @@ def parse_code_fence(
         raise MarkTeXError("malformed code fence", span(filename, offset, offset + len(opener), source))
     marker = fence.group(1)
     info = fence.group(2).strip()
-    if strict and "interp" in info.split():
-        raise MarkTeXError(
-            "legacy `interp` code fence flag is not supported in strict mode; use ```$",
-            span(filename, offset, offset + len(opener), source),
-        )
     interpolated = info.startswith("$")
     language = info[1:].strip() if interpolated else info
     start_offset = offset

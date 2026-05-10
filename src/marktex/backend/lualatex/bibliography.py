@@ -12,7 +12,7 @@ from marktex.bibliography import (
 )
 from marktex.core import Citation, Document, DocumentPatch
 from marktex.mos import RawString
-from marktex.source import MarkTeXError
+from marktex.source import MarkTeXError, SourceSpan
 
 
 Escaper = Callable[[str], str]
@@ -53,10 +53,10 @@ class LuaLaTeXBibliography:
         text = self.inline_citation_text(entries, citation)
         return self.wrap_inline_citation(text)
 
-    def entry_for_key(self, key: str, origin: object | None) -> BibEntry:
+    def entry_for_key(self, key: str, origin: SourceSpan | None) -> BibEntry:
         entry = self.resources.entries.get(key)
         if entry is None:
-            raise MarkTeXError(f"undefined bibliography entry: {key}", origin)  # type: ignore[arg-type]
+            raise MarkTeXError(f"undefined bibliography entry: {key}", origin)
         return entry
 
     def register_citation(self, key: str) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import json
 import subprocess
@@ -10,6 +11,7 @@ import unittest
 from pathlib import Path
 
 import marktex
+import marktex.runtime as runtime
 from marktex.bibliography import parse_bibtex_file, parse_bibliography_style, parse_citation_style
 from marktex.driver import ArtifactKind, compile_file
 from marktex.driver.compiler import build_document
@@ -68,6 +70,63 @@ class DriverTests(unittest.TestCase):
             compile_file(source)
             tex = source.with_suffix(".tex").read_text(encoding="utf-8")
             self.assertIn("Hello Ada.", tex)
+
+    def test_host_block_runtime_event_affects_backend(self) -> None:
+        build = build_document(
+            "$$$python\n"
+            "marktex.invoke(marktex.document_patch(\n"
+            "    'layout',\n"
+            "    marktex.call('Letter', context='layout.value', paper='letterpaper'),\n"
+            "))\n"
+            "$$$\n"
+            "Hello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[letterpaper]{geometry}", build.tex)
+        self.assertEqual(build.document.events[0].to_json()["call"]["head"], "layout")
+        self.assertEqual(build.state.to_json()["events"][0]["object"]["call"]["head"], "layout")
+
+    def test_host_runtime_events_do_not_leak_between_builds(self) -> None:
+        first = build_document(
+            "$$$python\nmarktex.invoke(marktex.document_patch('bibstyle', 'numeric'))\n$$$\n",
+            filename="first.mtx",
+        )
+        self.assertEqual(len(first.document.events), 1)
+        second = build_document("Hello\n", filename="second.mtx")
+        self.assertEqual(second.document.events, ())
+
+    def test_host_artifact_replays_events(self) -> None:
+        build = build_document(
+            "!# layout: A4, landscape\n"
+            "!@ body: font=Times\n"
+            "!!@ body\n"
+            "Hello\n",
+            filename="test.mtx",
+        )
+        namespace: dict[str, object] = {}
+        exec(build.host_script, namespace)
+        replayed = namespace["document"]
+        self.assertIsInstance(replayed, list)
+        self.assertEqual([event.__class__.__name__ for event in replayed], ["DocumentPatch", "ScopePush", "ScopeClose"])
+        self.assertEqual(replayed[0].call.head, "layout")
+        self.assertEqual(replayed[1].key, "body")
+        self.assertEqual(replayed[2].key, "body")
+
+    def test_host_artifact_does_not_rerun_user_host_blocks(self) -> None:
+        build = build_document(
+            "$$$python\nmarktex.invoke(marktex.document_patch('bibstyle', 'numeric'))\n$$$\n",
+            filename="test.mtx",
+        )
+        namespace: dict[str, object] = {}
+        exec(build.host_script, namespace)
+        replayed = namespace["document"]
+        self.assertIsInstance(replayed, list)
+        self.assertEqual(len(replayed), 1)
+
+    def test_runtime_rejects_unsupported_invoked_object(self) -> None:
+        session = runtime.RuntimeSession()
+        with self.assertRaisesRegex(MarkTeXError, "unsupported runtime object"):
+            session.invoke("not a MarkTeX event")
 
     def test_concrete_expression_is_inline_ast_part(self) -> None:
         build = build_document("Total [$ 1 + 2 ].\n", filename="test.mtx")
@@ -156,7 +215,7 @@ class DriverTests(unittest.TestCase):
             with self.assertRaisesRegex(MarkTeXError, "unclosed rich table"):
                 compile_file(source)
 
-    def test_lualatex_backend_mvp_blocks(self) -> None:
+    def test_lualatex_backend_supported_blocks(self) -> None:
         build = build_document(
             "!# layout: Letter, landscape\n"
             "# Title\n\n"
@@ -261,6 +320,17 @@ class DriverTests(unittest.TestCase):
             source.write_text("!# bib: refs.bib\nSee [^ cite: Missing ].\n", encoding="utf-8")
             with self.assertRaisesRegex(MarkTeXError, "undefined bibliography entry: Missing"):
                 build_document(source.read_text(encoding="utf-8"), filename=str(source))
+
+    def test_at_reference_payload_is_unsupported(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported reference payload: @Knuth84"):
+            build_document("See [^@Knuth84].\n", filename="test.mtx")
+
+    def test_valid_footnote_label_still_lowers(self) -> None:
+        build = build_document(
+            "Claim[^note-1].\n\n[^note-1]: Footnote body.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\footnote{Footnote body.}", build.tex)
 
     def test_custom_bibliography_style_can_include_uncited_entries(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -373,12 +443,19 @@ class DriverTests(unittest.TestCase):
                 with self.assertRaises(MarkTeXError):
                     build_document(f"[$ {expr} ]\n", filename="test.mtx")
 
-    def test_strict_rejects_legacy_interp_fence(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_dir:
-            source = Path(raw_dir) / "paper.mtx"
-            source.write_text("```python interp\nx = 1\n```\n", encoding="utf-8")
-            with self.assertRaisesRegex(MarkTeXError, "legacy"):
-                compile_file(source, strict=True)
+    def test_interp_info_string_is_plain_code_language(self) -> None:
+        build = build_document(
+            "```python interp\nprint('[$ PAGE.CURRENT ]')\n```\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\begin{verbatim}", build.tex)
+        self.assertIn("[$ PAGE.CURRENT ]", build.tex)
+        self.assertNotIn(r"\ttfamily\obeyspaces\obeylines", build.tex)
+
+    def test_compile_file_has_no_strict_or_schema_parameters(self) -> None:
+        parameters = inspect.signature(compile_file).parameters
+        self.assertNotIn("strict", parameters)
+        self.assertNotIn("schema_paths", parameters)
 
     def test_version_matches_pyproject(self) -> None:
         pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -398,8 +475,9 @@ class DriverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("Hello\n", encoding="utf-8")
+            target = "xelatex"
             with self.assertRaises(MarkTeXError):
-                compile_file(source, target="xelatex")  # type: ignore[arg-type]
+                compile_file(source, target=target)
 
     def test_unmatched_scope_close_fails(self) -> None:
         with self.assertRaisesRegex(MarkTeXError, "unmatched scope close"):
@@ -526,6 +604,17 @@ class CliTests(unittest.TestCase):
             result = self.run_cli(str(source), "--no-host")
             self.assertEqual(result.returncode, 2)
             self.assertIn("disabled by --no-host", result.stderr)
+
+    def test_cli_rejects_removed_strict_and_schema_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            source = Path(raw_dir) / "paper.mtx"
+            source.write_text("Hello\n", encoding="utf-8")
+            strict_result = self.run_cli(str(source), "--strict")
+            self.assertEqual(strict_result.returncode, 2)
+            self.assertIn("unrecognized arguments: --strict", strict_result.stderr)
+            schema_result = self.run_cli(str(source), "--schema", "custom.toml")
+            self.assertEqual(schema_result.returncode, 2)
+            self.assertIn("unrecognized arguments: --schema", schema_result.stderr)
 
     def test_cli_out_dir(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:

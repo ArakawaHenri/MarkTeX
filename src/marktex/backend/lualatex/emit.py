@@ -242,7 +242,7 @@ class LuaLaTeXEmitter:
                     lines.extend(self.emit_block(child))
                 lines.append(r"\fi")
                 return lines
-        raise MarkTeXError("unsupported symbolic conditional for LuaLaTeX MVP", block.origin)
+        raise MarkTeXError("unsupported symbolic conditional for LuaLaTeX backend", block.origin)
 
 
 def layout_options(document: Document) -> list[str]:
@@ -299,7 +299,7 @@ def expression_value_to_lualatex(value: object, source: str, origin: SourceSpan 
     if isinstance(value, SymbolicValue) and value.owner == "PAGE" and value.name == "TOTAL":
         return r"\pageref{LastPage}"
     if isinstance(value, SymbolicExpr):
-        raise MarkTeXError(f"unsupported symbolic expression for LuaLaTeX MVP: {source}", origin)
+        raise MarkTeXError(f"unsupported symbolic expression for LuaLaTeX backend: {source}", origin)
     return escape_latex(str(value))
 
 

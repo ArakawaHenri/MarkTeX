@@ -41,10 +41,10 @@ class SymbolicExpr:
     def __rmod__(self, other: Any) -> "SymbolicExpr":
         return self._rbinary("mod", other)
 
-    def __eq__(self, other: Any) -> "SymbolicExpr":  # type: ignore[override]
+    def __eq__(self, other: Any) -> Any:
         return self._binary("eq", other)
 
-    def __ne__(self, other: Any) -> "SymbolicExpr":  # type: ignore[override]
+    def __ne__(self, other: Any) -> Any:
         return self._binary("ne", other)
 
     def __lt__(self, other: Any) -> "SymbolicExpr":

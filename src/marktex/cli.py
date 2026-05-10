@@ -24,8 +24,6 @@ def main(argv: list[str] | None = None) -> int:
             output_path=output_path,
             out_dir=Path(args.out_dir) if args.out_dir else None,
             target=args.target,
-            schema_paths=tuple(Path(path) for path in args.schema),
-            strict=args.strict,
             no_host=args.no_host,
         )
         if output_path is not None and str(output_path) == "-":
@@ -64,13 +62,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="lualatex",
         help="output target; V0 only accepts lualatex",
     )
-    parser.add_argument(
-        "--schema",
-        action="append",
-        default=[],
-        help="additional schema config path (reserved hook)",
-    )
-    parser.add_argument("--strict", action="store_true", help="reject legacy/non-normative syntax")
     parser.add_argument(
         "--no-host",
         action="store_true",

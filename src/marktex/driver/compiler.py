@@ -9,6 +9,7 @@ from typing import Literal
 
 from marktex.backend.lualatex import emit_lualatex, make_backend_ir
 from marktex.core import (
+    Block,
     Citation,
     CodeBlock,
     CodeExpression,
@@ -27,6 +28,7 @@ from marktex.core import (
     InlineExpression,
     InlineNode,
     Link,
+    MarkTeXObject,
     Paragraph,
     ScopeClose,
     ScopePush,
@@ -52,6 +54,7 @@ from marktex.surface import (
     ScopeOpenNode,
     parse_surface,
 )
+from marktex.surface.grammar import is_footnote_label
 
 
 class ArtifactKind(str, Enum):
@@ -92,8 +95,8 @@ class _ConditionalFrame:
     branches: list[ConditionalBranch] = field(default_factory=list)
     current_condition: object | None = None
     current_origin: SourceSpan | None = None
-    current_body: list[object] = field(default_factory=list)
-    else_body: list[object] | None = None
+    current_body: list[Block] = field(default_factory=list)
+    else_body: list[Block] | None = None
 
     def push_branch(self) -> None:
         if self.current_condition is None:
@@ -101,7 +104,7 @@ class _ConditionalFrame:
         self.branches.append(
             ConditionalBranch(
                 self.current_condition,
-                tuple(self.current_body),  # type: ignore[arg-type]
+                tuple(self.current_body),
                 self.current_origin,
             )
         )
@@ -115,18 +118,10 @@ def compile_file(
     output_path: Path | None = None,
     out_dir: Path | None = None,
     target: Literal["lualatex"] = "lualatex",
-    schema_paths: tuple[Path, ...] = (),
-    strict: bool = False,
     no_host: bool = False,
 ) -> CompileResult:
     if target != "lualatex":
         raise MarkTeXError(f"unsupported target: {target}; V0 only supports lualatex")
-    if schema_paths:
-        # The CLI accepts the hook now; the loader is intentionally a later
-        # addition so built-in schema behavior remains deterministic.
-        for schema_path in schema_paths:
-            if not schema_path.exists():
-                raise MarkTeXError(f"schema file does not exist: {schema_path}")
 
     resolved_emits = set(emits or {ArtifactKind.TEX})
     if not resolved_emits:
@@ -138,7 +133,6 @@ def compile_file(
         source,
         filename=str(input_path),
         registry=registry,
-        strict=strict,
         no_host=no_host,
     )
 
@@ -152,19 +146,28 @@ def build_document(
     *,
     filename: str,
     registry: SchemaRegistry | None = None,
-    strict: bool = False,
     no_host: bool = False,
 ) -> _Build:
     registry = registry or builtin_registry()
-    events: list[object] = []
-    blocks: list[object] = []
+    events: list[MarkTeXObject] = []
+    blocks: list[Block] = []
     footnotes: list[FootnoteDefinition] = []
     state = StateEngine()
     host = PythonHost(no_host=no_host)
-    surface = parse_surface(source, filename=filename, strict=strict)
+    surface = parse_surface(source, filename=filename)
     conditional_stack: list[_ConditionalFrame] = []
 
-    def append_block(block: object) -> None:
+    def append_event(event: DocumentPatch | ScopePush | ScopeClose) -> None:
+        if isinstance(event, DocumentPatch):
+            validate_document_call(registry, event.call)
+        events.append(event)
+        state.invoke(event, event.origin)
+
+    def append_runtime_events() -> None:
+        for event in host.drain_runtime_events():
+            append_event(event)
+
+    def append_block(block: Block) -> None:
         if conditional_stack:
             frame = conditional_stack[-1]
             if frame.else_body is not None:
@@ -180,30 +183,28 @@ def build_document(
             for call in registry.resolve_calls(calls):
                 validate_document_call(registry, call)
                 obj = DocumentPatch(call, call.origin or node.origin)
-                events.append(obj)
-                state.invoke(obj, obj.origin)
+                append_event(obj)
         elif isinstance(node, ScopeOpenNode):
             calls = parse_mos(node.payload, context="scope", filename=filename)
             for call in calls:
                 push = scope_push_from_call(call, node.origin)
-                events.append(push)
-                state.invoke(push, push.origin)
+                append_event(push)
         elif isinstance(node, ScopeCloseNode):
             close = ScopeClose(node.key, node.origin)
-            events.append(close)
-            state.invoke(close, close.origin)
+            append_event(close)
         elif isinstance(node, HostBlockNode):
             if node.language != "python":
                 raise MarkTeXError(
-                    f"unsupported host block language: {node.language}; MVP only supports python",
+                    f"unsupported host block language: {node.language}; 0.1 only supports python",
                     node.origin,
                 )
             host.execute_block(node.body, node.origin)
+            append_runtime_events()
         elif isinstance(node, FootnoteDefinitionNode):
             footnotes.append(
                 FootnoteDefinition(
                     node.label,
-                    parse_inline_nodes(node.body, host, node.origin, source, strict=strict),
+                    parse_inline_nodes(node.body, host, node.origin, source),
                     node.origin,
                 )
             )
@@ -218,7 +219,6 @@ def build_document(
                         host,
                         span_from_offsets(filename, node.text_offsets, source),
                         source,
-                        strict=strict,
                         source_offsets=node.text_offsets,
                     ),
                     node.origin,
@@ -227,7 +227,7 @@ def build_document(
         elif isinstance(node, ParagraphNode):
             append_block(
                 Paragraph(
-                    parse_inline_nodes(node.text, host, node.origin, source, strict=strict),
+                    parse_inline_nodes(node.text, host, node.origin, source),
                     node.origin,
                 )
             )
@@ -247,7 +247,6 @@ def build_document(
                     host,
                     span_from_offsets(filename, offsets, source),
                     source,
-                    strict=strict,
                     source_offsets=offsets,
                 )
                 for cell, offsets in zip(rows[0], node.cell_offsets[0], strict=True)
@@ -259,7 +258,6 @@ def build_document(
                         host,
                         span_from_offsets(filename, offsets, source),
                         source,
-                        strict=strict,
                         source_offsets=offsets,
                     )
                     for cell, offsets in zip(row, offset_row, strict=True)
@@ -271,11 +269,13 @@ def build_document(
     if conditional_stack:
         raise MarkTeXError("unclosed conditional block", conditional_stack[-1].origin)
 
-    document = Document(tuple(events), tuple(blocks), tuple(footnotes))  # type: ignore[arg-type]
+    document = Document(tuple(events), tuple(blocks), tuple(footnotes))
     host_script = emit_host_script(document)
     if host.executed_blocks:
-        host_script += "\n# User host blocks executed during compilation.\n"
-        host_script += "\n\n".join(host.executed_blocks) + "\n"
+        host_script += "\n# User host blocks executed during compilation; shown for inspection only.\n"
+        for block in host.executed_blocks:
+            host_script += "# ---\n"
+            host_script += "\n".join("# " + line for line in block.splitlines()) + "\n"
     backend_ir = make_backend_ir(document)
     tex = emit_lualatex(document)
     return _Build(document, state, host_script, backend_ir, tex)
@@ -295,7 +295,7 @@ def handle_conditional_node(
     node: ConditionalNode,
     host: PythonHost,
     stack: list[_ConditionalFrame],
-    root_blocks: list[object],
+    root_blocks: list[Block],
 ) -> None:
     if node.marker == "!?":
         frame = _ConditionalFrame(node.origin)
@@ -326,7 +326,7 @@ def handle_conditional_node(
         stack.pop()
         conditional = Conditional(
             tuple(frame.branches),
-            tuple(frame.else_body or ()),  # type: ignore[arg-type]
+            tuple(frame.else_body or ()),
             frame.origin,
         )
         if stack:
@@ -354,7 +354,6 @@ def parse_inline_nodes(
     origin: SourceSpan,
     source: str,
     *,
-    strict: bool = False,
     source_offsets: tuple[int, ...] | None = None,
 ) -> tuple[InlineNode, ...]:
     nodes: list[InlineNode] = []
@@ -386,7 +385,7 @@ def parse_inline_nodes(
         if match.group(1) is not None:
             nodes.append(Image(match.group(1), match.group(2), token_origin))
         elif match.group(3) is not None:
-            nodes.append(reference_node(match.group(3), token_origin, strict=strict))
+            nodes.append(reference_node(match.group(3), token_origin))
         elif match.group(4) is not None:
             nodes.append(
                 Link(
@@ -395,7 +394,6 @@ def parse_inline_nodes(
                         host,
                         token_span(match.start(4), match.end(4)),
                         source,
-                        strict=strict,
                         source_offsets=child_offsets(match.start(4), match.end(4)),
                     ),
                     match.group(5),
@@ -412,7 +410,6 @@ def parse_inline_nodes(
                         host,
                         token_span(match.start(7), match.end(7)),
                         source,
-                        strict=strict,
                         source_offsets=child_offsets(match.start(7), match.end(7)),
                     ),
                     token_origin,
@@ -426,7 +423,6 @@ def parse_inline_nodes(
                         host,
                         token_span(match.start(8), match.end(8)),
                         source,
-                        strict=strict,
                         source_offsets=child_offsets(match.start(8), match.end(8)),
                     ),
                     token_origin,
@@ -443,9 +439,7 @@ def parse_inline_nodes(
     return tuple(nodes)
 
 
-def reference_node(payload: str, origin: SourceSpan, *, strict: bool) -> FootnoteRef | Citation:
-    if payload.strip().startswith("@") and strict:
-        raise MarkTeXError("legacy citation shorthand is not supported in strict mode", origin)
+def reference_node(payload: str, origin: SourceSpan) -> FootnoteRef | Citation:
     calls = parse_mos(payload, context="reference", filename=origin.filename)
     if len(calls) == 1 and calls[0].head == "cite":
         keys: list[str] = []
@@ -459,7 +453,7 @@ def reference_node(payload: str, origin: SourceSpan, *, strict: bool) -> Footnot
         if not keys:
             raise MarkTeXError("citation requires at least one key", origin)
         return Citation(tuple(keys), kwargs, origin)
-    if re.fullmatch(r"[A-Za-z0-9_.:-]+", payload.strip()):
+    if is_footnote_label(payload.strip()):
         return FootnoteRef(payload.strip(), origin)
     raise MarkTeXError(f"unsupported reference payload: {payload}", origin)
 

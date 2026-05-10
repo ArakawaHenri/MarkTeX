@@ -49,8 +49,6 @@ not a global function.
 | PDF generation | Out of scope |
 | `--emit host|ast|eir|backend-ir|tex|all` | Supported |
 | `--diagnostic-format text|json` | Supported |
-| `--schema` | Reserved hook; file existence is validated |
-| `--strict` | Rejects known legacy forms implemented by 0.1 |
 | `--no-host` | Supported restricted mode |
 | MOS raw strings, frames, tuples, escapes, raw literals | Supported |
 | Schema-driven value shading | Supported |
@@ -143,8 +141,6 @@ compile_file(
     output_path=None,
     out_dir=None,
     target="lualatex",
-    schema_paths=(),
-    strict=False,
     no_host=False,
 )
 ```
@@ -164,16 +160,18 @@ The V0 architecture is:
 -> .tex
 ```
 
-The long-term architecture also treats the generated host script as the
-explicit construction artifact:
+The `host` artifact is an executable replay of document and scope events. User
+host blocks that ran during compilation are retained as comments for inspection;
+they are not rerun by the replay artifact. The long-term architecture also
+treats generated host script as the complete construction artifact:
 
 ```text
 .mtx -> CST -> Surface AST / CallUnit -> generated host script
      -> canonical AST/EIR -> backend IR -> .tex
 ```
 
-The 0.1 driver executes an equivalent Python host environment directly while
-building the document, and emits a deterministic `host` artifact for inspection.
+The 0.1 driver executes a Python host environment directly while building the
+document, and emits a deterministic event replay artifact for inspection.
 
 Implementation modules:
 
@@ -460,6 +458,24 @@ BIB
 marktex
 ```
 
+The `marktex` intrinsic is a per-build runtime session. It exposes:
+
+```text
+marktex.raw(text, force_raw=False)
+marktex.tuple_value(*items)
+marktex.call(head, *args, context="document", **kwargs)
+marktex.document_patch(head, *args, **kwargs)
+marktex.scope_push(key, *args, scope="DEFAULT", **kwargs)
+marktex.scope_close(key="")
+marktex.invoke(event)
+marktex.finish()
+```
+
+`marktex.invoke()` accepts only `DocumentPatch`, `ScopePush`, and `ScopeClose`
+objects in 0.1. Runtime constructors normalize Python values into MOS values:
+strings become raw MOS strings, tuples and lists become MOS tuples, and nested
+calls must be written with `marktex.call(...)`.
+
 `PAGE.CURRENT` and `PAGE.TOTAL` are symbolic values. They are never concrete
 during host execution.
 
@@ -566,8 +582,8 @@ inserted as escaped code text. `PAGE.CURRENT` and `PAGE.TOTAL` remain symbolic
 until backend lowering, so the LuaLaTeX backend can render them as live page
 placeholders inside the displayed code block.
 
-In strict mode, the legacy `interp` info-string flag is rejected. Use `` ```$ ``
-instead.
+Only a `$` prefix enables code interpolation. An info string such as
+`` ```python interp `` is just an ordinary code-fence language string.
 
 ## 13. Rich Tables
 
@@ -639,6 +655,10 @@ Markdown footnotes and bibliography citations are deliberately separate:
 - `[^note]` always lowers as a Markdown-style footnote;
 - `[^ cite: Key ]` always lowers through the active citation style, even when
   that style is footnote-based.
+
+There is no `[^@key]` citation shorthand. A reference payload containing `@`
+does not match the footnote-label grammar and fails as an unsupported reference
+payload.
 
 Bibliography resource declarations should use MOS document directives:
 
@@ -1012,7 +1032,7 @@ Planned V0 work after 0.1:
 - fuller APA/MLA/Chicago bibliography rule coverage;
 - symbolic inline arithmetic such as `PAGE.TOTAL - PAGE.CURRENT`;
 - richer symbolic conditionals;
-- generated host script as the exact replayable construction path;
+- full generated host script as the exact replayable AST construction path;
 - optional PDF build driver outside `mtxc`, if a separate tool is desired.
 
 The core philosophy should not change: keep syntax thin, keep parser mechanics

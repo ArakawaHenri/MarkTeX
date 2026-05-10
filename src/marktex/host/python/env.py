@@ -32,14 +32,20 @@ SAFE_BUILTINS = MappingProxyType(
 
 
 class PythonHost:
-    """Small controlled Python host environment for the MVP compiler."""
+    """Small controlled Python host environment for the 0.1 compiler."""
 
-    def __init__(self, *, no_host: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        no_host: bool = False,
+        runtime_session: runtime.RuntimeSession | None = None,
+    ) -> None:
         self.no_host = no_host
+        self.runtime = runtime_session or runtime.RuntimeSession()
         self.executed_blocks: list[str] = []
         self.globals: dict[str, Any] = {
             "__builtins__": SAFE_BUILTINS,
-            "marktex": runtime,
+            "marktex": self.runtime,
             "PAGE": PAGE,
             "TIME": datetime.now(),
             "BIB": [],
@@ -79,3 +85,6 @@ class PythonHost:
                 f"host expression is disabled by --no-host: {expr}",
                 origin,
             ) from exc
+
+    def drain_runtime_events(self) -> tuple[runtime.RuntimeEvent, ...]:
+        return self.runtime.drain()
