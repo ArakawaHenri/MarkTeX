@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from marktex.core import Document, DocumentPatch, ScopeClose, ScopePush
 from marktex.mos import CallUnit, RawString, TupleValue
-from marktex.mos.model import MosValue
 
 
 def emit_host_script(document: Document) -> str:

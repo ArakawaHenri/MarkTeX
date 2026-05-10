@@ -12,16 +12,22 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install build tooling
-        run: python -m pip install --upgrade pip build
+          enable-cache: true
+      - name: Install Python
+        run: uv python install ${{ matrix.python-version }}
+      - name: Sync environment
+        run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
       - name: Unit tests
-        run: PYTHONPATH=src python -m unittest discover -s tests -v
+        run: uv run --locked --python ${{ matrix.python-version }} python -m unittest discover -s tests -v
       - name: Compile check
-        run: PYTHONPATH=src python -m compileall -q src tests
+        run: uv run --locked --python ${{ matrix.python-version }} python -m compileall -q src tests
+      - name: Ruff
+        run: uv run --locked --python ${{ matrix.python-version }} ruff check .
+      - name: Mypy
+        run: uv run --locked --python ${{ matrix.python-version }} mypy src
       - name: Whitespace check
         run: git diff --check
       - name: Build package
-        run: python -m build
+        run: uv build

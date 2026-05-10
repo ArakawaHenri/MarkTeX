@@ -44,14 +44,14 @@ def parse_surface(source: str, *, filename: str, strict: bool = False) -> Surfac
 
         if stripped_newline.startswith("```"):
             flush_paragraph(line_start)
-            node, index, offset = parse_code_fence(lines, index, offset, source, filename, strict=strict)
-            nodes.append(node)
+            fence_node, index, offset = parse_code_fence(lines, index, offset, source, filename, strict=strict)
+            nodes.append(fence_node)
             continue
 
         if stripped_newline.startswith("$$$"):
             flush_paragraph(line_start)
-            node, index, offset = parse_host_block(lines, index, offset, source, filename)
-            nodes.append(node)
+            host_node, index, offset = parse_host_block(lines, index, offset, source, filename)
+            nodes.append(host_node)
             continue
 
         footnote = re.match(r"^\[\^([A-Za-z0-9_.:-]+)\]:\s*(.*)$", stripped_newline)
@@ -70,8 +70,8 @@ def parse_surface(source: str, *, filename: str, strict: bool = False) -> Surfac
 
         if stripped_newline.startswith("+++"):
             flush_paragraph(line_start)
-            node, index, offset = parse_rich_table(lines, index, offset, source, filename)
-            nodes.append(node)
+            table_node, index, offset = parse_rich_table(lines, index, offset, source, filename)
+            nodes.append(table_node)
             continue
 
         conditional_marker = conditional_start(stripped_newline)
@@ -127,10 +127,15 @@ def parse_surface(source: str, *, filename: str, strict: bool = False) -> Surfac
         heading = re.match(r"^(#{1,6})\s+(.*)$", stripped_newline)
         if heading:
             flush_paragraph(line_start)
+            raw_text = heading.group(2)
+            leading_trim = len(raw_text) - len(raw_text.lstrip())
+            text = raw_text.strip()
+            text_start = line_start + heading.start(2) + leading_trim
             nodes.append(
                 HeadingNode(
                     len(heading.group(1)),
-                    heading.group(2).strip(),
+                    text,
+                    tuple(range(text_start, text_start + len(text) + 1)),
                     span(filename, line_start, line_start + len(stripped_newline), source),
                 )
             )
@@ -259,6 +264,7 @@ def parse_rich_table(
     index += 1
     offset += len(lines[index - 1])
     rows: list[tuple[str, ...]] = []
+    cell_offsets: list[tuple[tuple[int, ...], ...]] = []
     while index < len(lines):
         line = lines[index]
         stripped = line.rstrip("\n")
@@ -268,19 +274,31 @@ def parse_rich_table(
             offset += len(line)
             index += 1
             return (
-                RichTableNode(column_specs, tuple(rows), span(filename, start_offset, offset, source)),
+                RichTableNode(
+                    column_specs,
+                    tuple(rows),
+                    tuple(cell_offsets),
+                    span(filename, start_offset, offset, source),
+                ),
                 index,
                 offset,
             )
         if not stripped:
             raise MarkTeXError("blank lines are not allowed inside rich tables", span(filename, offset, offset, source))
-        cells = tuple(cell.strip() for cell in split_unescaped_pipe(stripped))
+        row_cells: list[str] = []
+        row_offsets: list[tuple[int, ...]] = []
+        for cell, offsets in split_unescaped_pipe_with_offsets(stripped, offset):
+            stripped_cell, stripped_offsets = strip_cell_offsets(cell, offsets)
+            row_cells.append(stripped_cell)
+            row_offsets.append(stripped_offsets)
+        cells = tuple(row_cells)
         if len(cells) != len(column_specs):
             raise MarkTeXError(
                 f"rich table row has {len(cells)} cells; expected {len(column_specs)}",
                 span(filename, offset, offset + len(stripped), source),
             )
         rows.append(cells)
+        cell_offsets.append(tuple(row_offsets))
         offset += len(line)
         index += 1
     raise MarkTeXError("unclosed rich table", span(filename, start_offset, start_offset, source))
@@ -305,6 +323,44 @@ def split_unescaped_pipe(text: str) -> list[str]:
         current.append("\\")
     parts.append("".join(current))
     return parts
+
+
+def split_unescaped_pipe_with_offsets(text: str, base_offset: int) -> list[tuple[str, tuple[int, ...]]]:
+    parts: list[tuple[str, tuple[int, ...]]] = []
+    current: list[str] = []
+    offsets: list[int] = [base_offset]
+    index = 0
+    while index < len(text):
+        char = text[index]
+        absolute = base_offset + index
+        if char == "\\":
+            if index + 1 < len(text):
+                current.append(text[index + 1])
+                offsets.append(base_offset + index + 2)
+                index += 2
+            else:
+                current.append("\\")
+                offsets.append(absolute + 1)
+                index += 1
+        elif char == "|":
+            parts.append(("".join(current), tuple(offsets)))
+            current = []
+            offsets = [absolute + 1]
+            index += 1
+        else:
+            current.append(char)
+            offsets.append(absolute + 1)
+            index += 1
+    parts.append(("".join(current), tuple(offsets)))
+    return parts
+
+
+def strip_cell_offsets(text: str, offsets: tuple[int, ...]) -> tuple[str, tuple[int, ...]]:
+    start = len(text) - len(text.lstrip())
+    end = len(text.rstrip())
+    if end < start:
+        end = start
+    return text[start:end], offsets[start : end + 1]
 
 
 def span(filename: str, start: int, end: int, source: str) -> SourceSpan:

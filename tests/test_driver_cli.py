@@ -233,6 +233,61 @@ class DriverTests(unittest.TestCase):
             with self.assertRaises(MarkTeXError):
                 compile_file(source, target="xelatex")  # type: ignore[arg-type]
 
+    def test_unmatched_scope_close_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unmatched scope close"):
+            build_document("!!@ w\n", filename="test.mtx")
+
+    def test_else_if_branch_selects_correct_body(self) -> None:
+        build = build_document(
+            "!? [$ False ]\nA\n!?!? [$ True ]\nB\n!?!? [$ False ]\nC\n!!?\n",
+            filename="test.mtx",
+        )
+        self.assertIn("B", build.tex)
+        self.assertNotIn("A", build.tex)
+        self.assertNotIn("C", build.tex)
+
+    def test_host_block_without_language_defaults_python(self) -> None:
+        build = build_document("$$$\nname = 'Ada'\n$$$\nHello [$ name ].\n", filename="test.mtx")
+        self.assertIn("Hello Ada.", build.tex)
+
+    def test_non_python_host_block_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported host block language"):
+            build_document("$$$ruby\nputs 'hi'\n$$$\n", filename="test.mtx")
+
+    def test_unclosed_conditional_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unclosed conditional"):
+            build_document("!? [$ True ]\nBody\n", filename="test.mtx")
+
+    def test_rich_table_wrong_cell_count_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "rich table row has"):
+            build_document("+++ A | B\nX\n+++\n", filename="test.mtx")
+
+    def test_heading_inline_content_is_lowered(self) -> None:
+        build = build_document("# Hello *World* and `code`\n", filename="test.mtx")
+        self.assertIn(r"\section{Hello \emph{World} and \texttt{code}}", build.tex)
+
+    def test_table_cell_inline_content_is_lowered(self) -> None:
+        build = build_document("+++ A | B\nHeader | Value\n*em* | **bold**\n+++\n", filename="test.mtx")
+        self.assertIn(r"\emph{em}", build.tex)
+        self.assertIn(r"\textbf{bold}", build.tex)
+
+    def test_heading_inline_diagnostic_span_points_to_token(self) -> None:
+        with self.assertRaises(MarkTeXError) as caught:
+            build_document("# Bad [$ PAGE.TOTAL - PAGE.CURRENT ]\n", filename="test.mtx")
+        span = caught.exception.diagnostic.span
+        self.assertIsNotNone(span)
+        self.assertEqual((span.line, span.column), (1, 7))
+
+    def test_table_inline_diagnostic_span_points_to_cell_token(self) -> None:
+        with self.assertRaises(MarkTeXError) as caught:
+            build_document(
+                "+++ A\nBad [$ PAGE.TOTAL - PAGE.CURRENT ]\n+++\n",
+                filename="test.mtx",
+            )
+        span = caught.exception.diagnostic.span
+        self.assertIsNotNone(span)
+        self.assertEqual((span.line, span.column), (2, 5))
+
 
 class CliTests(unittest.TestCase):
     def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
@@ -303,6 +358,15 @@ class CliTests(unittest.TestCase):
             result = self.run_cli(str(source), "--no-host")
             self.assertEqual(result.returncode, 2)
             self.assertIn("disabled by --no-host", result.stderr)
+
+    def test_cli_out_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            source = Path(raw_dir) / "paper.mtx"
+            out_dir = Path(raw_dir) / "custom_out"
+            source.write_text("Hello\n", encoding="utf-8")
+            result = self.run_cli(str(source), "--emit", "tex", "--out-dir", str(out_dir))
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue((out_dir / "paper.tex").exists())
 
 
 if __name__ == "__main__":

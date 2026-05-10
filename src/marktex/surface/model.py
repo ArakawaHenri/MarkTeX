@@ -49,6 +49,7 @@ class ConditionalNode:
 class HeadingNode:
     level: int
     text: str
+    text_offsets: tuple[int, ...]
     origin: SourceSpan
 
 
@@ -70,6 +71,7 @@ class CodeFenceNode:
 class RichTableNode:
     column_specs: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...]
+    cell_offsets: tuple[tuple[tuple[int, ...], ...], ...]
     origin: SourceSpan
 
 

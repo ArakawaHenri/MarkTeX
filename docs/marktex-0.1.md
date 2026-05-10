@@ -76,14 +76,19 @@ not a global function.
 Install from the repository:
 
 ```bash
-python3 -m pip install .
+uv tool install .
 ```
 
 Run from source without installation:
 
 ```bash
-PYTHONPATH=src python3 -m marktex.cli examples/hello.mtx
+uv sync --extra dev
+uv run mtxc examples/hello.mtx
 ```
+
+This repository uses `uv` as its only Python package manager. Project workflows
+must use `uv sync`, `uv run`, and `uv build`; do not introduce parallel
+pip/build/venv instructions.
 
 The installed command is:
 
@@ -891,31 +896,31 @@ See [^ cite: Knuth84, pages=12-15 ].
 Before a 0.1 release:
 
 ```bash
-PYTHONPATH=src python3 -m unittest tests.test_driver_cli.DriverTests.test_version_matches_pyproject
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-PYTHONPATH=src python3 -m compileall -q src tests
+uv sync --locked --extra dev
+uv run python -m unittest tests.test_driver_cli.DriverTests.test_version_matches_pyproject
+uv run python -m unittest discover -s tests -v
+uv run python -m compileall -q src tests
+uv run ruff check .
+uv run mypy src
 git diff --check
 ```
 
 Build distributions:
 
 ```bash
-python3 -m pip install build
-python3 -m build
+uv build
 ```
 
 Smoke test from source:
 
 ```bash
-PYTHONPATH=src python3 -m marktex.cli examples/hello.mtx --emit all
+uv run mtxc examples/hello.mtx --emit all
 ```
 
 Smoke test an installed wheel:
 
 ```bash
-python3 -m venv .venv-release
-. .venv-release/bin/activate
-python -m pip install dist/*.whl
+uv tool install --force dist/*.whl
 mtxc examples/hello.mtx
 ```
 

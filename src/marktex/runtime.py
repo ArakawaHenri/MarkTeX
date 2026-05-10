@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import cast
+
 from marktex.core import DocumentPatch, ScopeClose, ScopePush
+from marktex.mos.model import MosValue
 
 _EVENTS: list[object] = []
 
@@ -13,7 +16,14 @@ def invoke(obj: object) -> object:
 def document_patch(head: str, *args: object, **kwargs: object) -> DocumentPatch:
     from marktex.mos import CallUnit
 
-    return DocumentPatch(CallUnit("document", head, args=args, kwargs=dict(kwargs)))
+    return DocumentPatch(
+        CallUnit(
+            "document",
+            head,
+            args=cast("tuple[MosValue, ...]", args),
+            kwargs=cast("dict[str, MosValue]", dict(kwargs)),
+        )
+    )
 
 
 def scope_push(key: str, *args: object, scope: str = "DEFAULT", **kwargs: object) -> ScopePush:

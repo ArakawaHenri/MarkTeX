@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NoReturn
 
 from marktex.mos.model import CallUnit, MosValue, RawString, TupleValue
 from marktex.source import MarkTeXError, SourceSpan
@@ -227,7 +228,7 @@ class _Parser:
         column = start + 1 if last_newline == -1 else start - last_newline
         return SourceSpan(self.filename, start, end, line, column)
 
-    def error(self, message: str, index: int | None = None) -> None:
+    def error(self, message: str, index: int | None = None) -> NoReturn:
         where = self.index if index is None else index
         raise MarkTeXError(message, self.span(where, where))
 

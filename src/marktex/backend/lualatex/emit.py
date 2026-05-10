@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from marktex.core import (
     Citation,
     CodeBlock,
@@ -60,15 +62,15 @@ def emit_lualatex(document: Document) -> str:
     return "\n".join(preamble + body + [r"\end{document}", ""])
 
 
-def block_to_lualatex(block: object, footnotes: dict[str, object]) -> list[str]:
+def block_to_lualatex(block: object, footnotes: Mapping[str, object]) -> list[str]:
     if isinstance(block, Paragraph):
         return ["".join(inline_to_lualatex(child, footnotes) for child in block.children)]
     if isinstance(block, Heading):
-        return [heading_command(block.level, block.text)]
+        return [heading_command(block.level, block.children, footnotes)]
     if isinstance(block, CodeBlock):
         return [r"\begin{verbatim}", block.body.rstrip("\n"), r"\end{verbatim}"]
     if isinstance(block, Table):
-        return table_to_latex(block)
+        return table_to_latex(block, footnotes)
     if isinstance(block, Conditional):
         return conditional_to_lualatex(block, footnotes)
     raise MarkTeXError(f"unsupported block for LuaLaTeX backend: {block!r}")
@@ -102,7 +104,7 @@ def raw_kw(call: CallUnit, key: str) -> str | None:
     return None
 
 
-def heading_command(level: int, text: str) -> str:
+def heading_command(level: int, children: "tuple[object, ...]", footnotes: Mapping[str, object]) -> str:
     command = {
         1: "section",
         2: "subsection",
@@ -111,17 +113,30 @@ def heading_command(level: int, text: str) -> str:
         5: "subparagraph",
         6: "subparagraph",
     }.get(level, "paragraph")
-    return "\\" + command + "{" + escape_latex(text) + "}"
+    content = "".join(inline_to_lualatex(child, footnotes) for child in children)
+    return "\\" + command + "{" + content + "}"
 
 
-def table_to_latex(table: Table) -> list[str]:
+def table_to_latex(table: Table, footnotes: Mapping[str, object]) -> list[str]:
     column_count = len(table.header)
     spec = "|".join(["l"] * column_count)
     lines = [r"\begin{tabular}{" + spec + "}"]
-    lines.append(" & ".join(escape_latex(cell) for cell in table.header) + r" \\")
+    lines.append(
+        " & ".join(
+            "".join(inline_to_lualatex(child, footnotes) for child in cell)
+            for cell in table.header
+        )
+        + r" \\"
+    )
     lines.append(r"\hline")
     for row in table.rows:
-        lines.append(" & ".join(escape_latex(cell) for cell in row) + r" \\")
+        lines.append(
+            " & ".join(
+                "".join(inline_to_lualatex(child, footnotes) for child in cell)
+                for cell in row
+            )
+            + r" \\"
+        )
     lines.append(r"\end{tabular}")
     return lines
 
@@ -130,7 +145,7 @@ def escape_latex(text: str) -> str:
     return escape_plain_latex(text)
 
 
-def inline_to_lualatex(node: object, footnotes: dict[str, object] | None = None) -> str:
+def inline_to_lualatex(node: object, footnotes: Mapping[str, object] | None = None) -> str:
     footnotes = footnotes or {}
     if isinstance(node, Text):
         return escape_latex(node.value)
@@ -189,7 +204,7 @@ def expression_value_to_lualatex(value: object, source: str, origin: SourceSpan 
     return escape_latex(str(value))
 
 
-def conditional_to_lualatex(block: Conditional, footnotes: dict[str, object]) -> list[str]:
+def conditional_to_lualatex(block: Conditional, footnotes: Mapping[str, object]) -> list[str]:
     selected = concrete_conditional_body(block)
     if selected is not None:
         lines: list[str] = []

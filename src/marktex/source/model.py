@@ -13,7 +13,7 @@ class SourceSpan:
     line: int = 1
     column: int = 1
 
-    def to_json(self) -> dict[str, int | str]:
+    def to_json(self) -> dict[str, object]:
         return {
             "filename": self.filename,
             "start": self.start,

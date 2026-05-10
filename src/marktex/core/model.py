@@ -154,14 +154,14 @@ class Paragraph:
 @dataclass(frozen=True)
 class Heading:
     level: int
-    text: str
+    children: "tuple[InlineNode, ...]"
     origin: SourceSpan | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
             "kind": "heading",
             "level": self.level,
-            "text": self.text,
+            "children": [child.to_json() for child in self.children],
             "origin": _origin(self.origin),
         }
 
@@ -186,16 +186,16 @@ class CodeBlock:
 @dataclass(frozen=True)
 class Table:
     columns: tuple[CallUnit, ...]
-    header: tuple[str, ...]
-    rows: tuple[tuple[str, ...], ...]
+    header: "tuple[tuple[InlineNode, ...], ...]"
+    rows: "tuple[tuple[tuple[InlineNode, ...], ...], ...]"
     origin: SourceSpan | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
             "kind": "table",
             "columns": [column.to_json() for column in self.columns],
-            "header": list(self.header),
-            "rows": [list(row) for row in self.rows],
+            "header": [[child.to_json() for child in cell] for cell in self.header],
+            "rows": [[[child.to_json() for child in cell] for cell in row] for row in self.rows],
             "origin": _origin(self.origin),
         }
 

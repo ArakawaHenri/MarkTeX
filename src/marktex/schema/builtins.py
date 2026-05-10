@@ -47,7 +47,11 @@ def builtin_registry() -> SchemaRegistry:
                 },
             ),
             "layout.value": ContextSpec("layout.value", shade=LAYOUT_VALUE_SHADES),
+            # post-0.1: "inline" will allow MOS-driven inline style overrides
+            # (bold/italic via schema shading); not invoked by the compiler in 0.1.
             "inline": ContextSpec("inline", shade=TEXT_STYLE_SHADES),
+            # post-0.1: "image.value" will allow schema-driven fit shading on
+            # image nodes (contain/cover); not invoked by the compiler in 0.1.
             "image.value": ContextSpec("image.value", shade=IMAGE_VALUE_SHADES),
             "scope": ContextSpec("scope"),
             "reference": ContextSpec(

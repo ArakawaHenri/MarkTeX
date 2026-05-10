@@ -31,7 +31,7 @@ from marktex.core import (
     Table,
     Text,
 )
-from marktex.host.python import PythonHost, SymbolicExpr, SymbolicValue, emit_host_script
+from marktex.host.python import PythonHost, SymbolicValue, emit_host_script
 from marktex.mos import CallUnit, RawString, parse_mos
 from marktex.schema import SchemaRegistry, builtin_registry
 from marktex.source import MarkTeXError, SourceSpan
@@ -182,13 +182,13 @@ def build_document(
         elif isinstance(node, ScopeOpenNode):
             calls = parse_mos(node.payload, context="scope", filename=filename)
             for call in calls:
-                obj = scope_push_from_call(call, node.origin)
-                events.append(obj)
-                state.invoke(obj, obj.origin)
+                push = scope_push_from_call(call, node.origin)
+                events.append(push)
+                state.invoke(push, push.origin)
         elif isinstance(node, ScopeCloseNode):
-            obj = ScopeClose(node.key, node.origin)
-            events.append(obj)
-            state.invoke(obj, obj.origin)
+            close = ScopeClose(node.key, node.origin)
+            events.append(close)
+            state.invoke(close, close.origin)
         elif isinstance(node, HostBlockNode):
             if node.language != "python":
                 raise MarkTeXError(
@@ -207,7 +207,20 @@ def build_document(
         elif isinstance(node, ConditionalNode):
             handle_conditional_node(node, host, conditional_stack, blocks)
         elif isinstance(node, HeadingNode):
-            append_block(Heading(node.level, node.text, node.origin))
+            append_block(
+                Heading(
+                    node.level,
+                    parse_inline_nodes(
+                        node.text,
+                        host,
+                        span_from_offsets(filename, node.text_offsets, source),
+                        source,
+                        strict=strict,
+                        source_offsets=node.text_offsets,
+                    ),
+                    node.origin,
+                )
+            )
         elif isinstance(node, ParagraphNode):
             append_block(
                 Paragraph(
@@ -221,7 +234,32 @@ def build_document(
         elif isinstance(node, RichTableNode):
             rows = node.rows
             columns = tuple(column_call(spec, filename, registry) for spec in node.column_specs)
-            append_block(Table(columns, rows[0], tuple(rows[1:]), node.origin))
+            header = tuple(
+                parse_inline_nodes(
+                    cell,
+                    host,
+                    span_from_offsets(filename, offsets, source),
+                    source,
+                    strict=strict,
+                    source_offsets=offsets,
+                )
+                for cell, offsets in zip(rows[0], node.cell_offsets[0], strict=True)
+            )
+            table_body = tuple(
+                tuple(
+                    parse_inline_nodes(
+                        cell,
+                        host,
+                        span_from_offsets(filename, offsets, source),
+                        source,
+                        strict=strict,
+                        source_offsets=offsets,
+                    )
+                    for cell, offsets in zip(row, offset_row, strict=True)
+                )
+                for row, offset_row in zip(rows[1:], node.cell_offsets[1:], strict=True)
+            )
+            append_block(Table(columns, header, table_body, node.origin))
 
     if conditional_stack:
         raise MarkTeXError("unclosed conditional block", conditional_stack[-1].origin)
@@ -310,9 +348,21 @@ def parse_inline_nodes(
     source: str,
     *,
     strict: bool = False,
+    source_offsets: tuple[int, ...] | None = None,
 ) -> tuple[InlineNode, ...]:
     nodes: list[InlineNode] = []
     last = 0
+
+    def token_span(start: int, end: int) -> SourceSpan:
+        if source_offsets is not None:
+            return absolute_span(origin.filename, source_offsets[start], source_offsets[end], source)
+        return offset_span(origin, start, end, source)
+
+    def child_offsets(start: int, end: int) -> tuple[int, ...] | None:
+        if source_offsets is None:
+            return None
+        return source_offsets[start : end + 1]
+
     token = re.compile(
         r"!\[([^\]]*)\]\(([^)]*)\)"
         r"|\[\^([^\]]+)\]"
@@ -324,8 +374,8 @@ def parse_inline_nodes(
     )
     for match in token.finditer(text):
         if match.start() > last:
-            nodes.append(Text(text[last : match.start()], offset_span(origin, last, match.start(), source)))
-        token_origin = offset_span(origin, match.start(), match.end(), source)
+            nodes.append(Text(text[last : match.start()], token_span(last, match.start())))
+        token_origin = token_span(match.start(), match.end())
         if match.group(1) is not None:
             nodes.append(Image(match.group(1), match.group(2), token_origin))
         elif match.group(3) is not None:
@@ -333,7 +383,14 @@ def parse_inline_nodes(
         elif match.group(4) is not None:
             nodes.append(
                 Link(
-                    parse_inline_nodes(match.group(4), host, token_origin, source, strict=strict),
+                    parse_inline_nodes(
+                        match.group(4),
+                        host,
+                        token_span(match.start(4), match.end(4)),
+                        source,
+                        strict=strict,
+                        source_offsets=child_offsets(match.start(4), match.end(4)),
+                    ),
                     match.group(5),
                     token_origin,
                 )
@@ -343,14 +400,28 @@ def parse_inline_nodes(
         elif match.group(7) is not None:
             nodes.append(
                 Strong(
-                    parse_inline_nodes(match.group(7), host, token_origin, source, strict=strict),
+                    parse_inline_nodes(
+                        match.group(7),
+                        host,
+                        token_span(match.start(7), match.end(7)),
+                        source,
+                        strict=strict,
+                        source_offsets=child_offsets(match.start(7), match.end(7)),
+                    ),
                     token_origin,
                 )
             )
         elif match.group(8) is not None:
             nodes.append(
                 Emphasis(
-                    parse_inline_nodes(match.group(8), host, token_origin, source, strict=strict),
+                    parse_inline_nodes(
+                        match.group(8),
+                        host,
+                        token_span(match.start(8), match.end(8)),
+                        source,
+                        strict=strict,
+                        source_offsets=child_offsets(match.start(8), match.end(8)),
+                    ),
                     token_origin,
                 )
             )
@@ -359,7 +430,7 @@ def parse_inline_nodes(
             nodes.append(InlineExpression(expr, host.eval_expr(expr, token_origin), token_origin))
         last = match.end()
     if last < len(text):
-        nodes.append(Text(text[last:], offset_span(origin, last, len(text), source)))
+        nodes.append(Text(text[last:], token_span(last, len(text))))
     if not nodes:
         nodes.append(Text(text, origin))
     return tuple(nodes)
@@ -449,7 +520,7 @@ def write_artifacts(
         return {}
 
     written: dict[ArtifactKind, Path] = {}
-    if len(artifacts) == 1:
+    if len(artifacts) == 1 and out_dir is None:
         kind, text = next(iter(artifacts.items()))
         path = output_path or default_single_output(input_path, kind)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -488,10 +559,18 @@ def json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def offset_span(origin: SourceSpan, start_delta: int, end_delta: int, source: str) -> SourceSpan:
-    start = origin.start + start_delta
-    end = origin.start + end_delta
+def span_from_offsets(filename: str, offsets: tuple[int, ...], source: str) -> SourceSpan:
+    return absolute_span(filename, offsets[0], offsets[-1], source)
+
+
+def absolute_span(filename: str, start: int, end: int, source: str) -> SourceSpan:
     line = source.count("\n", 0, start) + 1
     last_newline = source.rfind("\n", 0, start)
     column = start + 1 if last_newline == -1 else start - last_newline
-    return SourceSpan(origin.filename, start, end, line, column)
+    return SourceSpan(filename, start, end, line, column)
+
+
+def offset_span(origin: SourceSpan, start_delta: int, end_delta: int, source: str) -> SourceSpan:
+    start = origin.start + start_delta
+    end = origin.start + end_delta
+    return absolute_span(origin.filename, start, end, source)

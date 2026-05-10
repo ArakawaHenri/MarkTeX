@@ -15,7 +15,7 @@ The single canonical documentation entry is
 ## CLI
 
 ```bash
-python -m pip install .
+uv tool install .
 mtxc paper.mtx
 ```
 
@@ -33,8 +33,12 @@ mtxc paper.mtx --diagnostic-format json
 Developer runs without installation can use:
 
 ```bash
-PYTHONPATH=src python3 -m marktex.cli paper.mtx
+uv sync --extra dev
+uv run mtxc paper.mtx
 ```
+
+This repository uses `uv` as its only Python package manager. Use `uv run`,
+`uv sync`, and `uv build` for project workflows.
 
 Because `.mtx` files may contain Python host blocks, treat them as scripts.
 Use `--no-host` for untrusted input. See the canonical documentation for the

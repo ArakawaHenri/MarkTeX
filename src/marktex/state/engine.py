@@ -9,13 +9,13 @@ from marktex.source import MarkTeXError, SourceSpan
 @dataclass(frozen=True)
 class InvokeEvent:
     order: int
-    object: MarkTeXObject
+    payload: MarkTeXObject
     origin: SourceSpan | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
             "order": self.order,
-            "object": object_to_json(self.object),
+            "object": object_to_json(self.payload),
             "origin": self.origin.to_json() if self.origin else None,
         }
 
