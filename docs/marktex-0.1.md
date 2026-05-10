@@ -58,7 +58,7 @@ not a global function.
 | `!@` and `!!@` scope events | Supported in state/EIR |
 | Python `$$$` host blocks | Supported for trusted input |
 | Inline `[$ ... ]` expressions | Supported |
-| `PAGE.CURRENT` and `PAGE.TOTAL` inline placeholders | Supported |
+| `PAGE.CURRENT` and `PAGE.TOTAL` placeholders | Supported inline and in `$` code fences |
 | Complex symbolic inline math | Diagnostic in LuaLaTeX backend |
 | Headings and paragraphs | Supported |
 | Basic inline Markdown | Supported subset |
@@ -66,8 +66,8 @@ not a global function.
 | Rich `+++` tables | Supported |
 | Markdown pipe tables | Planned |
 | Footnotes | Supported single-line definitions |
-| Explicit citation placeholders | Supported placeholder lowering |
-| Full bibliography backend | Planned |
+| Explicit citation references | Supported through citation styles |
+| Bibliography backend | Supported BibTeX subset with `.mtxcs`/`.mtxbs` styles |
 | Conditionals | Concrete bool and `PAGE.CURRENT == PAGE.TOTAL` supported |
 | Full Markdown dialect compatibility | Planned |
 
@@ -186,6 +186,7 @@ src/marktex/schema/                built-in call specs and shorthand data
 src/marktex/core/                  immutable document objects
 src/marktex/state/                 invoke log and scope stack
 src/marktex/host/python/           Python host profile and symbolic values
+src/marktex/bibliography/          BibTeX parsing and citation style loading
 src/marktex/backend/lualatex/      LuaLaTeX lowering
 ```
 
@@ -560,10 +561,10 @@ print("[$ name ]")
 ```
 ````
 
-enables `[$ ... ]` interpolation inside the code body before it is emitted as a
-verbatim block. In 0.1, symbolic values inside interpolated code are rendered as
-debug-style text such as `PAGE.CURRENT`; they are not lowered to live LaTeX
-placeholders inside verbatim.
+enables `[$ ... ]` interpolation inside the code body. Concrete expressions are
+inserted as escaped code text. `PAGE.CURRENT` and `PAGE.TOTAL` remain symbolic
+until backend lowering, so the LuaLaTeX backend can render them as live page
+placeholders inside the displayed code block.
 
 In strict mode, the legacy `interp` info-string flag is rejected. Use `` ```$ ``
 instead.
@@ -613,16 +614,31 @@ Footnote labels may contain letters, numbers, `_`, `.`, `:`, and `-`.
 Definitions are single-line in 0.1. An undefined footnote reference is a
 backend diagnostic.
 
+In LuaLaTeX output, ordinary inline footnote references lower to `\footnote`.
+Footnote references inside rich table cells lower to a table-safe
+`\footnotemark`, with matching `\footnotetext` emitted immediately after the
+`tabular`.
+
 Explicit citations:
 
 ```marktex
+!# bib: main.bib
+!# citestyle: apa
+!# bibstyle: apa
+
 See [^ cite: Knuth84, pages=12-15 ].
 ```
 
 Citation payloads reuse MOS in reference context. The call head is `cite`; raw
 positional args become citation keys, and raw kwargs become citation options.
-The 0.1 backend emits a visible placeholder superscript. Full bibliography
-backend integration is planned.
+The backend resolves each key against active BibTeX resources and renders the
+in-text citation through the active `.mtxcs` citation style.
+
+Markdown footnotes and bibliography citations are deliberately separate:
+
+- `[^note]` always lowers as a Markdown-style footnote;
+- `[^ cite: Key ]` always lowers through the active citation style, even when
+  that style is footnote-based.
 
 Bibliography resource declarations should use MOS document directives:
 
@@ -632,8 +648,43 @@ Bibliography resource declarations should use MOS document directives:
 !# bib-: old.bib
 ```
 
-Do not make direct host expressions the baseline bibliography syntax. Host code
-may still manipulate resources when the user intentionally opts into scripting.
+`bib` replaces the active resource list, `bib+` appends, and `bib-` removes.
+Paths are resolved relative to the current `.mtx` file. The first bibliography
+backend supports a common BibTeX subset: `@article`, `@book`,
+`@inproceedings`, `@thesis`, `@misc`, and `@online`, with field names treated
+case-insensitively.
+
+Citation and bibliography styles are selected independently:
+
+```marktex
+!# citestyle: chicago-notes
+!# bibstyle: chicago-notes-bibliography
+```
+
+Built-in citation styles are `numeric`, `superscript`, `apa`, `mla`,
+`chicago-notes`, and `chicago-author-date`. Built-in bibliography styles are
+`numeric`, `apa`, `mla`, `chicago-notes-bibliography`, and
+`chicago-author-date`. If the style value looks like a path or ends with
+`.mtxcs` / `.mtxbs`, it is loaded as a custom MOS style file relative to the
+document.
+
+Minimal `.mtxcs`:
+
+```marktex
+style: name=custom;
+citation: mode=author-page, form=paren, locator-prefix=` `;
+```
+
+Minimal `.mtxbs`:
+
+```marktex
+style: name=custom;
+references: title=Sources, include=cited, sort=author-title, placement=new-page, label=none;
+template: default, author, title, container, year, url;
+```
+
+`include=cited` and `include=all` are style-level choices. MarkTeX does not
+hard-code whether uncited BibTeX entries appear in references.
 
 ## 15. Conditionals
 
@@ -695,6 +746,8 @@ FootnoteRef
 Citation
 Paragraph
 Heading
+CodeText
+CodeExpression
 CodeBlock
 Table
 Conditional
@@ -759,9 +812,14 @@ Lowering support:
 - inline code -> `\texttt`;
 - links -> `\href`;
 - images -> `\includegraphics`;
-- footnotes -> `\footnote`;
-- citation placeholders -> visible superscript text;
-- code blocks -> `verbatim`;
+- ordinary footnotes -> `\footnote`;
+- rich table cell footnotes -> `\footnotemark` plus deferred `\footnotetext`
+  after the `tabular`;
+- citations -> active `.mtxcs` citation style;
+- references -> active `.mtxbs` bibliography style, appended when non-empty;
+- ordinary code blocks -> `verbatim`;
+- `$`-interpolated code blocks -> escaped `\ttfamily` text with live lowered
+  page placeholders;
 - rich tables -> simple `tabular`;
 - `PAGE.CURRENT` -> `\thepage{}`;
 - `PAGE.TOTAL` -> `\pageref{LastPage}`;
@@ -927,7 +985,9 @@ mtxc examples/hello.mtx
 Optional LuaLaTeX smoke when available:
 
 ```bash
-lualatex examples/hello.tex
+uv run mtxc examples/comprehensive.mtx --emit all --out-dir /tmp/marktex-comprehensive
+lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-comprehensive /tmp/marktex-comprehensive/comprehensive.tex
+lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-comprehensive /tmp/marktex-comprehensive/comprehensive.tex
 ```
 
 0.1 changelog:
@@ -949,7 +1009,7 @@ Planned V0 work after 0.1:
 - fuller Markdown block support through a proper Markdown parser boundary;
 - Markdown pipe table fallback;
 - backend lowering for scope-driven typography;
-- real bibliography backend;
+- fuller APA/MLA/Chicago bibliography rule coverage;
 - symbolic inline arithmetic such as `PAGE.TOTAL - PAGE.CURRENT`;
 - richer symbolic conditionals;
 - generated host script as the exact replayable construction path;

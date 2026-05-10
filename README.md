@@ -6,8 +6,9 @@ MarkTeX is a base Markdown superset for programmable documents that compile to
 LuaLaTeX-oriented `.tex` files.
 
 The current package milestone is `0.1`: installable Python package, `mtxc` CLI,
-MOS call syntax, Python host runtime, canonical debug artifacts, and a thin
-LuaLaTeX backend. `mtxc` does not run LuaLaTeX and does not build PDFs.
+MOS call syntax, Python host runtime, canonical debug artifacts, a BibTeX-backed
+citation style layer, and a thin LuaLaTeX backend. `mtxc` does not run LuaLaTeX
+and does not build PDFs.
 
 The single canonical documentation entry is
 [`docs/marktex-0.1.md`](docs/marktex-0.1.md).
