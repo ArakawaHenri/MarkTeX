@@ -39,7 +39,7 @@ class StateEngine:
         elif isinstance(obj, ScopeClose):
             self._close_scope(obj.key, obj.origin)
         elif not isinstance(obj, DocumentPatch):
-            # Non-state objects may still appear in the log later, but the V0
+            # Non-state objects may still appear in the log later, but the 0.1
             # driver only invokes state objects.
             pass
         self.events.append(InvokeEvent(order, obj, origin))

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from marktex import __version__
-from marktex.driver import ArtifactKind, compile_file
+from marktex.driver import ArtifactKind, InputStage, compile_file
 from marktex.driver.compiler import ALL_ARTIFACTS
 from marktex.source import MarkTeXError
 
@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
             output_path=output_path,
             out_dir=Path(args.out_dir) if args.out_dir else None,
             target=args.target,
+            from_stage=args.from_stage,
             no_host=args.no_host,
         )
         if output_path is not None and str(output_path) == "-":
@@ -45,9 +46,9 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mtxc",
-        description="Compile MarkTeX .mtx files to LuaLaTeX-oriented artifacts.",
+        description="Compile MarkTeX artifacts through explicit pipeline stages.",
     )
-    parser.add_argument("input", help=".mtx source file")
+    parser.add_argument("input", help="input artifact")
     parser.add_argument("-o", "--output", help="output path for one emitted artifact; use '-' for stdout")
     parser.add_argument("--out-dir", help="output directory for multiple artifacts")
     parser.add_argument(
@@ -55,12 +56,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KIND",
-        help="artifact to emit: tex, host, ast, eir, backend-ir, all",
+        help="artifact to emit: target, host, ast, eir, backend-ir, all",
     )
     parser.add_argument(
         "--target",
         default="lualatex",
-        help="output target; V0 only accepts lualatex",
+        help="output target; 0.1 only accepts lualatex",
+    )
+    parser.add_argument(
+        "--from",
+        dest="from_stage",
+        choices=[stage.value for stage in InputStage],
+        default=InputStage.MTX.value,
+        help="input stage: mtx, surface, host, ast, eir, or backend-ir",
     )
     parser.add_argument(
         "--no-host",
@@ -79,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_emits(raw_emits: list[str]) -> set[ArtifactKind]:
     if not raw_emits:
-        return {ArtifactKind.TEX}
+        return {ArtifactKind.TARGET}
     emits: set[ArtifactKind] = set()
     for raw in raw_emits:
         if raw == "all":
