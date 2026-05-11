@@ -4,6 +4,7 @@ import unittest
 
 from marktex.mos import CallUnit, RawString, parse_mos
 from marktex.schema import ContextSpec, SchemaRegistry, builtin_registry
+from marktex.source import MarkTeXError
 
 
 class MosParserTests(unittest.TestCase):
@@ -32,6 +33,15 @@ class MosParserTests(unittest.TestCase):
         value = call.args[0]
         self.assertIsInstance(value, RawString)
         self.assertEqual(value.text, " helloworld")
+
+    def test_tuple_value_allows_leading_space(self) -> None:
+        call = parse_mos("a: (x, y)")[0]
+        value = call.args[0]
+        self.assertEqual(value.to_json()["kind"], "tuple")
+
+    def test_tuple_rejects_bare_named_argument(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "expected ','"):
+            parse_mos("a: (font=Times)")
 
 
 class SchemaTests(unittest.TestCase):

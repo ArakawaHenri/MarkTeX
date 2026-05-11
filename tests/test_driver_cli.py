@@ -151,6 +151,30 @@ class DriverTests(unittest.TestCase):
                     emits={ArtifactKind.TARGET},
                 )
 
+    def test_ast_artifact_rejects_string_bool(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            artifact = {
+                "kind": "ast",
+                "marktex_version": marktex.__version__,
+                "artifact_version": 1,
+                "payload": {
+                    "kind": "document",
+                    "events": [],
+                    "blocks": [
+                        {
+                            "kind": "paragraph",
+                            "children": [{"kind": "line_break", "hard": "false", "origin": None}],
+                            "origin": None,
+                        }
+                    ],
+                    "footnotes": [],
+                },
+            }
+            path = Path(raw_dir) / "bad.ast.json"
+            path.write_text(json.dumps(artifact), encoding="utf-8")
+            with self.assertRaisesRegex(MarkTeXError, "line break hard must be a boolean"):
+                compile_file(path, from_stage="ast")
+
     def test_from_host_with_no_host_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             directory = Path(raw_dir)
@@ -182,6 +206,24 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(events[2]["key"], "w")
         self.assertEqual(events[2]["kwargs"]["font"]["text"], "Times")
 
+    def test_scope_target_parameter_is_validated_and_recorded(self) -> None:
+        build = build_document("!@ w: theme: body;, scope=e\n!!@ w\n", filename="test.mtx")
+        event = build.document.events[0].to_json()
+        self.assertEqual(event["key"], "w")
+        self.assertEqual(event["kwargs"]["scope"]["text"], "e")
+        self.assertEqual(event["args"][0]["head"], "theme")
+        self.assertEqual(build.state.to_json()["scopes"][0]["target"], "e")
+
+    def test_scope_target_default_is_canonicalized(self) -> None:
+        build = build_document("!@ w: scope=DEFAULT\n!!@ w\n", filename="test.mtx")
+        event = build.document.events[0].to_json()
+        self.assertNotIn("scope", event["kwargs"])
+        self.assertEqual(build.state.to_json()["scopes"][0]["target"], "DEFAULT")
+
+    def test_unknown_scope_target_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported scope target: aside"):
+            build_document("!@ w: scope=aside\n", filename="test.mtx")
+
     def test_host_block_variable_visible_to_later_expression(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
@@ -201,7 +243,7 @@ class DriverTests(unittest.TestCase):
             "Hello\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\usepackage[letterpaper]{geometry}", build.target_text)
+        self.assertIn(r"\usepackage[paperwidth=8.5in,paperheight=11in]{geometry}", build.target_text)
         self.assertEqual(build.document.events[0].to_json()["call"]["head"], "layout")
         self.assertEqual(build.state.to_json()["events"][0]["object"]["call"]["head"], "layout")
 
@@ -344,10 +386,186 @@ class DriverTests(unittest.TestCase):
             "+++ align=left | align=right\nName | Score\nAda | 98\n+++\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\usepackage[letterpaper,landscape]{geometry}", build.target_text)
+        self.assertIn(r"\usepackage[paperwidth=11in,paperheight=8.5in]{geometry}", build.target_text)
         self.assertIn(r"\section{Title}", build.target_text)
         self.assertIn(r"\begin{verbatim}", build.target_text)
         self.assertIn(r"\begin{tabular}", build.target_text)
+
+    def test_layout_aliases_canonicalize_to_dimensions(self) -> None:
+        shorthand = build_document("!# layout: A4\nHello\n", filename="test.mtx")
+        explicit = build_document("!# layout: paper=a4paper\nHello\n", filename="test.mtx")
+        keyword_alias = build_document("!# layout: paper=A4\nHello\n", filename="test.mtx")
+        expected = r"\usepackage[paperwidth=210mm,paperheight=297mm]{geometry}"
+        self.assertIn(expected, shorthand.target_text)
+        self.assertIn(expected, explicit.target_text)
+        self.assertIn(expected, keyword_alias.target_text)
+
+    def test_layout_applies_size_before_orientation(self) -> None:
+        build = build_document(
+            "!# layout: width=100mm, height=200mm, orientation=landscape\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[paperwidth=200mm,paperheight=100mm]{geometry}", build.target_text)
+
+    def test_layout_orientation_is_atomic_noop_when_already_matching(self) -> None:
+        build = build_document(
+            "!# layout: width=200mm, height=100mm, orientation=landscape\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[paperwidth=200mm,paperheight=100mm]{geometry}", build.target_text)
+
+    def test_layout_orientation_compares_physical_units(self) -> None:
+        build = build_document(
+            "!# layout: width=8in, height=200mm, orientation=portrait\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[paperwidth=200mm,paperheight=8in]{geometry}", build.target_text)
+        with self.assertRaisesRegex(MarkTeXError, "cannot compare dimensions for orientation"):
+            build_document("!# layout: width=10em, height=2in, orientation=landscape\nHello\n", filename="test.mtx")
+
+    def test_margin_directive_lowers_to_geometry(self) -> None:
+        build = build_document("!# margin: top=20pt, bottom=24pt\nHello\n", filename="test.mtx")
+        self.assertIn("top=20pt", build.target_text)
+        self.assertIn("bottom=24pt", build.target_text)
+
+    def test_body_document_directive_delays_single_page_setup_until_next_content(self) -> None:
+        build = build_document(
+            "First\n"
+            "!# layout: A5\n"
+            "!# margin: top=20pt\n"
+            "Second\n",
+            filename="test.mtx",
+        )
+        self.assertEqual([block.to_json()["kind"] for block in build.document.blocks], ["paragraph", "page_setup", "paragraph"])
+        self.assertEqual(build.target_text.count(r"\clearpage"), 1)
+        self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm,top=20pt}", build.target_text)
+
+    def test_body_config_document_directives_do_not_page_break(self) -> None:
+        build = build_document(
+            "First\n"
+            "!# bibstyle: numeric\n"
+            "!# citestyle: numeric\n"
+            "Second\n",
+            filename="test.mtx",
+        )
+        self.assertEqual([block.to_json()["kind"] for block in build.document.blocks], ["paragraph", "paragraph"])
+        self.assertEqual([event.to_json()["call"]["head"] for event in build.document.events], ["bibstyle", "citestyle"])
+        self.assertNotIn(r"\clearpage", build.target_text)
+
+    def test_body_bibliography_resource_directive_does_not_page_break(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            source = Path(raw_dir) / "paper.mtx"
+            (Path(raw_dir) / "refs.bib").write_text(
+                "@book{Knuth84, author={Donald Knuth}, title={TeXbook}, year={1984}}\n",
+                encoding="utf-8",
+            )
+            source.write_text("First\n!# bib: refs.bib\nSecond\n", encoding="utf-8")
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertEqual([block.to_json()["kind"] for block in build.document.blocks], ["paragraph", "paragraph"])
+        self.assertEqual([event.to_json()["call"]["head"] for event in build.document.events], ["bib"])
+        self.assertNotIn(r"\clearpage", build.target_text)
+
+    def test_newpage_is_explicit_page_break_everywhere(self) -> None:
+        head = build_document("!# newpage\nHello\n", filename="test.mtx")
+        self.assertEqual([block.to_json()["kind"] for block in head.document.blocks], ["page_break", "paragraph"])
+        self.assertEqual(head.document.events, ())
+        self.assertIn(r"\clearpage", head.target_text)
+
+        tail = build_document("Hello\n!# newpage\n", filename="test.mtx")
+        self.assertEqual([block.to_json()["kind"] for block in tail.document.blocks], ["paragraph", "page_break"])
+        self.assertIn(r"\clearpage", tail.target_text)
+
+        only = build_document("!# newpage\n", filename="test.mtx")
+        self.assertEqual([block.to_json()["kind"] for block in only.document.blocks], ["page_break"])
+        self.assertIn(r"\clearpage", only.target_text)
+
+    def test_newpage_flushes_pending_page_setup(self) -> None:
+        build = build_document("First\n!# layout: A5\n!# newpage\nSecond\n", filename="test.mtx")
+        self.assertEqual([block.to_json()["kind"] for block in build.document.blocks], ["paragraph", "page_setup", "paragraph"])
+        self.assertEqual(build.target_text.count(r"\clearpage"), 1)
+        self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm}", build.target_text)
+
+    def test_newpage_merges_with_previous_empty_page_transition_only(self) -> None:
+        repeated = build_document("First\n!# newpage\n!# newpage\nSecond\n", filename="test.mtx")
+        self.assertEqual([block.to_json()["kind"] for block in repeated.document.blocks], ["paragraph", "page_break", "paragraph"])
+        self.assertEqual(repeated.target_text.count(r"\clearpage"), 1)
+
+        following_setup = build_document(
+            "First\n"
+            "!# layout: A5\n"
+            "!# newpage\n"
+            "!# layout: Letter\n"
+            "Second\n",
+            filename="test.mtx",
+        )
+        self.assertEqual(
+            [block.to_json()["kind"] for block in following_setup.document.blocks],
+            ["paragraph", "page_setup", "page_setup", "paragraph"],
+        )
+        self.assertEqual(following_setup.target_text.count(r"\clearpage"), 2)
+        self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm}", following_setup.target_text)
+        self.assertIn(r"\newgeometry{paperwidth=8.5in,paperheight=11in}", following_setup.target_text)
+
+    def test_newpage_is_not_a_document_event(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "newpage' is not a document event"):
+            build_document(
+                "$$$python\nmarktex.invoke(marktex.document_patch('newpage'))\n$$$\n",
+                filename="test.mtx",
+            )
+
+    def test_branch_document_directive_creates_body_page_setup(self) -> None:
+        build = build_document(
+            "First\n"
+            "!? [$ True ]\n"
+            "!# layout: A5\n"
+            "Second\n"
+            "!!?\n",
+            filename="test.mtx",
+        )
+        conditional = build.document.blocks[1].to_json()
+        self.assertEqual([block["kind"] for block in conditional["branches"][0]["body"]], ["page_setup", "paragraph"])
+        self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm}", build.target_text)
+
+    def test_branch_newpage_is_kept_even_without_following_content(self) -> None:
+        build = build_document("!? [$ True ]\n!# newpage\n!!?\n", filename="test.mtx")
+        conditional = build.document.blocks[0].to_json()
+        self.assertEqual([block["kind"] for block in conditional["branches"][0]["body"]], ["page_break"])
+        self.assertIn(r"\clearpage", build.target_text)
+
+    def test_state_document_directives_inside_branch_are_diagnostics(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "document directive 'bibstyle' is not supported"):
+            build_document("!? [$ True ]\n!# bibstyle: numeric\n!!?\n", filename="test.mtx")
+
+    def test_branch_page_setup_inherits_current_layout(self) -> None:
+        build = build_document(
+            "!# layout: Letter\n"
+            "First\n"
+            "!? [$ True ]\n"
+            "!# margin: top=20pt\n"
+            "Second\n"
+            "!!?\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\newgeometry{paperwidth=8.5in,paperheight=11in,top=20pt}", build.target_text)
+
+    def test_trailing_body_document_directive_does_not_emit_blank_page(self) -> None:
+        build = build_document("First\n!# layout: A5\n", filename="test.mtx")
+        self.assertEqual([block.to_json()["kind"] for block in build.document.blocks], ["paragraph"])
+        self.assertNotIn(r"\clearpage", build.target_text)
+
+    def test_invalid_layout_and_margin_values_fail(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported paper"):
+            build_document("!# layout: paper=foo\nHello\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "unsupported orientation"):
+            build_document("!# layout: orientation=diagonal\nHello\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "invalid top dimension"):
+            build_document("!# margin: top=wide\nHello\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "does not accept"):
+            build_document("!# newpage: now\nHello\n", filename="test.mtx")
+
+    def test_invalid_table_alignment_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported table column alignment"):
+            build_document("+++ align=middle\nHeader\nCell\n+++\n", filename="test.mtx")
 
     def test_basic_inline_fallback_lowers(self) -> None:
         build = build_document(
@@ -445,6 +663,12 @@ class DriverTests(unittest.TestCase):
         self.assertIn(r"\href{https://example.com}{site}", build.target_text)
         self.assertIn(r"\href{https://shortcut.example}{shortcut}", build.target_text)
         self.assertIn(r"\includegraphics{assets/logo.pdf}", build.target_text)
+
+    def test_link_titles_are_unsupported(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unsupported link title"):
+            build_document('[site](https://example.com "title")\n', filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "unsupported link title"):
+            build_document("[ref]: https://example.com title\n\n[site][ref]\n", filename="test.mtx")
 
     def test_conditional_link_reference_definition_does_not_leak(self) -> None:
         build = build_document(
@@ -584,7 +808,7 @@ class DriverTests(unittest.TestCase):
             source.write_text(
                 "!# bib: refs.bib\n"
                 "!# citestyle: chicago-notes\n"
-                "+++ A | B\n"
+                "+++ align=left | align=left\n"
                 "Ref | Status\n"
                 "[^ cite: Turing36 ] | ok\n"
                 "+++\n",
@@ -665,9 +889,17 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(bibliography.include, "all")
         self.assertEqual(bibliography.templates["default"], ("author", "title"))
 
+    def test_citation_style_rejects_invalid_mode_form_pairs(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "requires mode note"):
+            parse_citation_style("style: name=s; citation: mode=numeric, form=footnote;", "bad.mtxcs")
+        with self.assertRaisesRegex(MarkTeXError, "requires form footnote"):
+            parse_citation_style("style: name=s; citation: mode=note, form=square;", "bad.mtxcs")
+        note = parse_citation_style("style: name=s; citation: mode=note;", "note.mtxcs")
+        self.assertEqual(note.form, "footnote")
+
     def test_table_cell_footnote_is_deferred_after_tabular(self) -> None:
         build = build_document(
-            "+++ A | B\nHeader | Value\nCell[^note] | ok\n+++\n\n"
+            "+++ align=left | align=left\nHeader | Value\nCell[^note] | ok\n+++\n\n"
             "[^note]: Table footnote body.\n",
             filename="test.mtx",
         )
@@ -677,7 +909,7 @@ class DriverTests(unittest.TestCase):
 
     def test_multiple_table_cell_footnotes_defer_in_source_order(self) -> None:
         build = build_document(
-            "+++ A | B\nHeader | Value\nFirst[^a] | Second[^b]\n+++\n\n"
+            "+++ align=left | align=left\nHeader | Value\nFirst[^a] | Second[^b]\n+++\n\n"
             "[^a]: First note.\n"
             "[^b]: Second note.\n",
             filename="test.mtx",
@@ -690,7 +922,7 @@ class DriverTests(unittest.TestCase):
     def test_table_cell_undefined_footnote_fails(self) -> None:
         with self.assertRaisesRegex(MarkTeXError, "undefined footnote: missing"):
             build_document(
-                "+++ A\nHeader\nCell[^missing]\n+++\n",
+                "+++ align=left\nHeader\nCell[^missing]\n+++\n",
                 filename="test.mtx",
             )
 
@@ -793,14 +1025,14 @@ class DriverTests(unittest.TestCase):
 
     def test_rich_table_wrong_cell_count_fails(self) -> None:
         with self.assertRaisesRegex(MarkTeXError, "rich table row has"):
-            build_document("+++ A | B\nX\n+++\n", filename="test.mtx")
+            build_document("+++ align=left | align=left\nX\n+++\n", filename="test.mtx")
 
     def test_heading_inline_content_is_lowered(self) -> None:
         build = build_document("# Hello *World* and `code`\n", filename="test.mtx")
         self.assertIn(r"\section{Hello \emph{World} and \texttt{code}}", build.target_text)
 
     def test_table_cell_inline_content_is_lowered(self) -> None:
-        build = build_document("+++ A | B\nHeader | Value\n*em* | **bold**\n+++\n", filename="test.mtx")
+        build = build_document("+++ align=left | align=left\nHeader | Value\n*em* | **bold**\n+++\n", filename="test.mtx")
         self.assertIn(r"\emph{em}", build.target_text)
         self.assertIn(r"\textbf{bold}", build.target_text)
 
@@ -814,7 +1046,7 @@ class DriverTests(unittest.TestCase):
     def test_table_inline_diagnostic_span_points_to_cell_token(self) -> None:
         with self.assertRaises(MarkTeXError) as caught:
             build_document(
-                "+++ A\nBad [$ PAGE.TOTAL - PAGE.CURRENT ]\n+++\n",
+                "+++ align=left\nBad [$ PAGE.TOTAL - PAGE.CURRENT ]\n+++\n",
                 filename="test.mtx",
             )
         span = caught.exception.diagnostic.span
@@ -935,6 +1167,24 @@ class CliTests(unittest.TestCase):
             result = self.run_cli(str(source), "--emit", "target", "--out-dir", str(out_dir))
             self.assertEqual(result.returncode, 0)
             self.assertTrue((out_dir / "paper.tex").exists())
+
+    def test_cli_finite_options_are_trimmed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            source = Path(raw_dir) / "paper.mtx"
+            source.write_text("Hello\n", encoding="utf-8")
+            result = self.run_cli(
+                "--from",
+                " mtx ",
+                "--target",
+                " lualatex ",
+                "--emit",
+                " target ",
+                "--diagnostic-format",
+                " text ",
+                str(source),
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(source.with_suffix(".tex").exists())
 
 
 class FallbackSyntaxTests(unittest.TestCase):
@@ -1322,8 +1572,14 @@ class RuntimeApiTests(unittest.TestCase):
 
     def test_session_scope_push_with_non_default_scope(self) -> None:
         session = runtime.RuntimeSession()
-        push = session.scope_push("k", scope="mycontext")
+        push = session.scope_push("k", scope="e")
         self.assertIn("scope", push.kwargs)
+        self.assertEqual(push.kwargs["scope"].text, "e")
+
+    def test_session_rejects_unknown_scope_target(self) -> None:
+        session = runtime.RuntimeSession()
+        with self.assertRaisesRegex(MarkTeXError, "unsupported scope target: mycontext"):
+            session.scope_push("k", scope="mycontext")
 
     def test_session_drain_returns_and_clears(self) -> None:
         session = runtime.RuntimeSession()
