@@ -706,7 +706,7 @@ print("hello")
 ```
 ````
 
-emits a verbatim block.
+emits a LuaLaTeX code block with explicit typewriter spacing.
 
 Interpolated code fence:
 
@@ -995,9 +995,9 @@ Lowering support:
   after the `tabular`;
 - citations -> active `.mtxcs` citation style;
 - references -> active `.mtxbs` bibliography style, appended when non-empty;
-- ordinary code blocks -> `verbatim`;
-- `$`-interpolated code blocks -> escaped `\ttfamily` text with live lowered
-  page placeholders;
+- ordinary code blocks -> escaped typewriter text with explicit spacing;
+- `$`-interpolated code blocks -> the same code block renderer with live
+  lowered page placeholders;
 - rich and pipe tables -> simple `tabular`;
 - lists -> `itemize` or `enumerate`;
 - task list items -> explicit `[ ]` or `[x]` item labels;

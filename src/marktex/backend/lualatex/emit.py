@@ -157,22 +157,34 @@ class LuaLaTeXEmitter:
         return "\\" + command + "{" + self.emit_inline_children(children) + "}"
 
     def emit_code_block(self, block: CodeBlock) -> list[str]:
-        if not block.interpolated or not block.parts:
-            return [r"\begin{verbatim}", block.body.rstrip("\n"), r"\end{verbatim}"]
-        body = "".join(self.emit_code_part(part) for part in block.parts).rstrip("\n")
+        lines = self.emit_code_lines(block)
         return [
-            r"\par\noindent\begingroup",
-            r"\ttfamily\obeyspaces\obeylines",
-            body,
-            r"\par\endgroup",
+            r"\par\begingroup\ttfamily",
+            *(r"\noindent\strut " + line + r"\par" for line in lines),
+            r"\endgroup",
         ]
 
     def emit_code_part(self, part: CodePart) -> str:
         if isinstance(part, CodeText):
-            return escape_plain_latex(part.value)
+            return escape_code_latex(part.value)
         if isinstance(part, CodeExpression):
-            return expression_value_to_lualatex(part.value, part.source, part.origin)
+            return expression_value_to_code_lualatex(part.value, part.source, part.origin)
         raise MarkTeXError(f"unsupported code part for LuaLaTeX backend: {part!r}")
+
+    def emit_code_lines(self, block: CodeBlock) -> list[str]:
+        if block.interpolated and block.parts:
+            fragments = [self.emit_code_part(part) for part in block.parts]
+        else:
+            fragments = [escape_code_latex(block.body)]
+        fragments = trim_trailing_newlines(fragments)
+        lines = [""]
+        for text in fragments:
+            chunks = text.split("\n")
+            for index, chunk in enumerate(chunks):
+                if index:
+                    lines.append("")
+                lines[-1] += chunk
+        return lines
 
     def emit_table(self, table: Table) -> list[str]:
         column_count = len(table.header)
@@ -475,6 +487,24 @@ def escape_plain_latex(text: str) -> str:
     return "".join(replacements.get(char, char) for char in text)
 
 
+def escape_code_latex(text: str) -> str:
+    replacements = {
+        " ": "\\ ",
+        "\t": "\\ \\ \\ \\ ",
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(replacements.get(char, char) for char in text)
+
+
 def expression_value_to_lualatex(value: object, source: str, origin: SourceSpan | None = None) -> str:
     if isinstance(value, SymbolicValue) and value.owner == "PAGE" and value.name == "CURRENT":
         return r"\thepage{}"
@@ -483,6 +513,34 @@ def expression_value_to_lualatex(value: object, source: str, origin: SourceSpan 
     if isinstance(value, SymbolicExpr):
         raise MarkTeXError(f"unsupported symbolic expression for LuaLaTeX backend: {source}", origin)
     return escape_latex(str(value))
+
+
+def expression_value_to_code_lualatex(
+    value: object,
+    source: str,
+    origin: SourceSpan | None = None,
+) -> str:
+    if isinstance(value, SymbolicValue) and value.owner == "PAGE" and value.name == "CURRENT":
+        return r"\thepage{}"
+    if isinstance(value, SymbolicValue) and value.owner == "PAGE" and value.name == "TOTAL":
+        return r"\pageref{LastPage}"
+    if isinstance(value, SymbolicExpr):
+        raise MarkTeXError(f"unsupported symbolic expression for LuaLaTeX backend: {source}", origin)
+    return escape_code_latex(str(value))
+
+
+def trim_trailing_newlines(fragments: list[str]) -> list[str]:
+    result = list(fragments)
+    while result:
+        text = result[-1]
+        trimmed = text.rstrip("\n")
+        if trimmed == text:
+            break
+        if trimmed:
+            result[-1] = trimmed
+            break
+        result.pop()
+    return result or [""]
 
 
 def concrete_conditional_body(block: Conditional) -> tuple[Block, ...] | None:

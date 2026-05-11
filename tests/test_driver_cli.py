@@ -309,7 +309,7 @@ class DriverTests(unittest.TestCase):
             "```$python\nprint('page [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ]')\n```\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\ttfamily\obeyspaces\obeylines", build.target_text)
+        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
         self.assertIn(r"\thepage{}", build.target_text)
         self.assertIn(r"\pageref{LastPage}", build.target_text)
         self.assertNotIn("PAGE.CURRENT", build.target_text)
@@ -388,7 +388,7 @@ class DriverTests(unittest.TestCase):
         )
         self.assertIn(r"\usepackage[paperwidth=11in,paperheight=8.5in]{geometry}", build.target_text)
         self.assertIn(r"\section{Title}", build.target_text)
-        self.assertIn(r"\begin{verbatim}", build.target_text)
+        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
         self.assertIn(r"\begin{tabular}", build.target_text)
 
     def test_layout_aliases_canonicalize_to_dimensions(self) -> None:
@@ -962,9 +962,25 @@ class DriverTests(unittest.TestCase):
             "```python interp\nprint('[$ PAGE.CURRENT ]')\n```\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\begin{verbatim}", build.target_text)
-        self.assertIn("[$ PAGE.CURRENT ]", build.target_text)
+        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
+        self.assertIn(r"[\$\ PAGE.CURRENT\ ]", build.target_text)
         self.assertNotIn(r"\ttfamily\obeyspaces\obeylines", build.target_text)
+
+    def test_plain_and_interpolated_code_blocks_share_indentation_renderer(self) -> None:
+        build = build_document(
+            "```python\n"
+            "def f():\n"
+            "    return 1\n"
+            "```\n\n"
+            "```$python\n"
+            "def f():\n"
+            "    return [$ 1 ]\n"
+            "```\n",
+            filename="test.mtx",
+        )
+        self.assertNotIn(r"\begin{verbatim}", build.target_text)
+        self.assertNotIn(r"\ttfamily\obeyspaces\obeylines", build.target_text)
+        self.assertEqual(build.target_text.count(r"\noindent\strut \ \ \ \ return\ 1\par"), 2)
 
     def test_compile_file_has_no_strict_or_schema_parameters(self) -> None:
         parameters = inspect.signature(compile_file).parameters
@@ -1202,13 +1218,13 @@ class FallbackSyntaxTests(unittest.TestCase):
 
     def test_tilde_fenced_code_block_lowers(self) -> None:
         build = build_document("~~~\ncode block\n~~~\n", filename="test.mtx")
-        self.assertIn(r"\begin{verbatim}", build.target_text)
-        self.assertIn("code block", build.target_text)
+        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
+        self.assertIn(r"code\ block", build.target_text)
 
     def test_indented_code_block_lowers(self) -> None:
         build = build_document("    indented code\n", filename="test.mtx")
-        self.assertIn(r"\begin{verbatim}", build.target_text)
-        self.assertIn("indented code", build.target_text)
+        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
+        self.assertIn(r"indented\ code", build.target_text)
 
     def test_blockquote_lowers(self) -> None:
         build = build_document("> Quoted text\n", filename="test.mtx")
