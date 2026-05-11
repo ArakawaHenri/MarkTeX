@@ -30,6 +30,7 @@ dev = [
   "pytest>=8",
   "ruff>=0.6",
   "mypy>=1.11",
+  "coverage>=7.14.0",
 ]
 
 [project.scripts]
@@ -45,6 +46,13 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[tool.coverage.run]
+source = ["src/marktex"]
+omit = [
+  "*.mtx.host.py",
+  "*/.mtxbuild/*.host.py",
+]
 
 [dependency-groups]
 dev = [

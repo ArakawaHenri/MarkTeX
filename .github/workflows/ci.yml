@@ -31,3 +31,7 @@ jobs:
         run: git diff --check
       - name: Build package
         run: uv build
+      - name: Wheel install smoke
+        run: |
+          uv tool install --force dist/*.whl
+          mtxc examples/hello.mtx --emit all --out-dir /tmp/marktex-wheel-smoke
