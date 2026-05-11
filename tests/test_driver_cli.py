@@ -13,20 +13,21 @@ from pathlib import Path
 import marktex
 import marktex.runtime as runtime
 from marktex.bibliography import parse_bibtex_file, parse_bibliography_style, parse_citation_style
+from marktex.core import Document
 from marktex.driver import ArtifactKind, compile_file
 from marktex.driver.compiler import build_document
 from marktex.source import MarkTeXError
 
 
 class DriverTests(unittest.TestCase):
-    def test_default_compile_writes_tex(self) -> None:
+    def test_default_compile_writes_lualatex_target(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             directory = Path(raw_dir)
             source = directory / "paper.mtx"
             source.write_text("# Title\n\nHello [$ PAGE.CURRENT ].\n", encoding="utf-8")
             result = compile_file(source)
             output = directory / "paper.tex"
-            self.assertEqual(result.written[ArtifactKind.TEX], output)
+            self.assertEqual(result.written[ArtifactKind.TARGET], output)
             self.assertIn("\\section{Title}", output.read_text(encoding="utf-8"))
             self.assertIn("\\thepage{}", output.read_text(encoding="utf-8"))
 
@@ -38,19 +39,137 @@ class DriverTests(unittest.TestCase):
             source.write_text("Hello\n", encoding="utf-8")
             compile_file(
                 source,
-                emits={ArtifactKind.AST, ArtifactKind.EIR, ArtifactKind.TEX},
+                emits={ArtifactKind.AST, ArtifactKind.EIR, ArtifactKind.TARGET},
                 out_dir=out_dir,
             )
             self.assertTrue((out_dir / "paper.ast.json").exists())
             self.assertTrue((out_dir / "paper.eir.json").exists())
             self.assertTrue((out_dir / "paper.tex").exists())
 
+    def test_emit_all_includes_self_describing_pipeline_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = directory / "paper.mtx"
+            source.write_text("# Title\n\nHello\n", encoding="utf-8")
+            result = compile_file(source, emits=set(ArtifactKind), out_dir=directory / "build")
+            for kind in (
+                ArtifactKind.SURFACE,
+                ArtifactKind.AST,
+                ArtifactKind.EIR,
+                ArtifactKind.BACKEND_IR,
+            ):
+                artifact = json.loads(result.artifacts[kind])
+                self.assertEqual(artifact["kind"], kind.value)
+                self.assertIn("marktex_version", artifact)
+                self.assertIn("artifact_version", artifact)
+                self.assertIn("payload", artifact)
+            self.assertIn("document_from_surface_artifact", result.artifacts[ArtifactKind.HOST])
+
+    def test_from_host_emits_same_ast_and_target(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = directory / "paper.mtx"
+            source.write_text("# Title\n\nHello [$ PAGE.CURRENT ].\n", encoding="utf-8")
+            first = compile_file(source, emits=set(ArtifactKind), out_dir=directory / "build")
+            host_path = first.written[ArtifactKind.HOST]
+            second = compile_file(
+                host_path,
+                from_stage="host",
+                emits={ArtifactKind.AST, ArtifactKind.TARGET},
+                out_dir=directory / "from-host",
+            )
+            self.assertEqual(
+                json.loads(first.artifacts[ArtifactKind.AST])["payload"],
+                json.loads(second.artifacts[ArtifactKind.AST])["payload"],
+            )
+            self.assertEqual(first.artifacts[ArtifactKind.TARGET], second.artifacts[ArtifactKind.TARGET])
+
+    def test_from_ast_and_backend_ir_compile_without_mtx(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = directory / "paper.mtx"
+            source.write_text("# Title\n\nHello\n", encoding="utf-8")
+            first = compile_file(source, emits=set(ArtifactKind), out_dir=directory / "build")
+            source.unlink()
+            ast_result = compile_file(
+                first.written[ArtifactKind.AST],
+                from_stage="ast",
+                emits={ArtifactKind.BACKEND_IR, ArtifactKind.TARGET},
+                out_dir=directory / "from-ast",
+            )
+            backend_result = compile_file(
+                first.written[ArtifactKind.BACKEND_IR],
+                from_stage="backend-ir",
+                emits={ArtifactKind.TARGET},
+                out_dir=directory / "from-backend-ir",
+            )
+            self.assertEqual(first.artifacts[ArtifactKind.TARGET], ast_result.artifacts[ArtifactKind.TARGET])
+            self.assertEqual(first.artifacts[ArtifactKind.TARGET], backend_result.artifacts[ArtifactKind.TARGET])
+
+    def test_backend_ir_is_self_contained_for_bibliography(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            refs = directory / "refs.bib"
+            refs.write_text(
+                "@book{Knuth84, author={Donald Knuth}, title={The TeXbook}, year={1984}}\n",
+                encoding="utf-8",
+            )
+            style = directory / "all.mtxbs"
+            style.write_text(
+                "style: name=all; "
+                "references: title=`All Sources`, include=all, sort=key, placement=inline, label=key; "
+                "template: default, author, title, year;\n",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n!# bibstyle: all.mtxbs\nSee [^ cite: Knuth84 ].\n",
+                encoding="utf-8",
+            )
+            first = compile_file(source, emits=set(ArtifactKind), out_dir=directory / "build")
+            refs.unlink()
+            style.unlink()
+            result = compile_file(
+                first.written[ArtifactKind.BACKEND_IR],
+                from_stage="backend-ir",
+                emits={ArtifactKind.TARGET},
+                out_dir=directory / "from-backend-ir",
+            )
+            self.assertIn("Donald Knuth", result.artifacts[ArtifactKind.TARGET])
+            self.assertIn("All Sources", result.artifacts[ArtifactKind.TARGET])
+
+    def test_from_stage_requires_matching_artifact_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = directory / "paper.mtx"
+            source.write_text("Hello\n", encoding="utf-8")
+            first = compile_file(source, emits=set(ArtifactKind), out_dir=directory / "build")
+            with self.assertRaisesRegex(MarkTeXError, "expected ast artifact, got 'backend-ir'"):
+                compile_file(
+                    first.written[ArtifactKind.BACKEND_IR],
+                    from_stage="ast",
+                    emits={ArtifactKind.TARGET},
+                )
+
+    def test_from_host_with_no_host_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = directory / "paper.mtx"
+            source.write_text("Hello\n", encoding="utf-8")
+            first = compile_file(source, emits={ArtifactKind.HOST}, out_dir=directory / "build")
+            with self.assertRaisesRegex(MarkTeXError, "--from host cannot be used with --no-host"):
+                compile_file(
+                    first.written[ArtifactKind.HOST],
+                    from_stage="host",
+                    no_host=True,
+                )
+
     def test_scope_close_is_not_parsed_as_scope_open(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("!@ w\n!!@ w\nHello\n", encoding="utf-8")
             result = compile_file(source, emits={ArtifactKind.EIR})
-            eir = json.loads(result.artifacts[ArtifactKind.EIR])
+            eir = json.loads(result.artifacts[ArtifactKind.EIR])["payload"]
             self.assertEqual(eir["state"]["scopes"][0]["key"], "w")
             self.assertEqual(eir["state"]["scopes"][0]["close_order"], 1)
 
@@ -82,7 +201,7 @@ class DriverTests(unittest.TestCase):
             "Hello\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\usepackage[letterpaper]{geometry}", build.tex)
+        self.assertIn(r"\usepackage[letterpaper]{geometry}", build.target_text)
         self.assertEqual(build.document.events[0].to_json()["call"]["head"], "layout")
         self.assertEqual(build.state.to_json()["events"][0]["object"]["call"]["head"], "layout")
 
@@ -106,22 +225,24 @@ class DriverTests(unittest.TestCase):
         namespace: dict[str, object] = {}
         exec(build.host_script, namespace)
         replayed = namespace["document"]
-        self.assertIsInstance(replayed, list)
-        self.assertEqual([event.__class__.__name__ for event in replayed], ["DocumentPatch", "ScopePush", "ScopeClose"])
-        self.assertEqual(replayed[0].call.head, "layout")
-        self.assertEqual(replayed[1].key, "body")
-        self.assertEqual(replayed[2].key, "body")
+        self.assertIsInstance(replayed, Document)
+        self.assertEqual([event.__class__.__name__ for event in replayed.events], ["DocumentPatch", "ScopePush", "ScopeClose"])
+        self.assertEqual(replayed.events[0].call.head, "layout")
+        self.assertEqual(replayed.events[1].key, "body")
+        self.assertEqual(replayed.events[2].key, "body")
+        self.assertEqual(replayed.blocks[0].to_json()["children"][0]["value"], "Hello")
 
-    def test_host_artifact_does_not_rerun_user_host_blocks(self) -> None:
+    def test_host_artifact_is_canonical_construction_script(self) -> None:
         build = build_document(
             "$$$python\nmarktex.invoke(marktex.document_patch('bibstyle', 'numeric'))\n$$$\n",
             filename="test.mtx",
         )
         namespace: dict[str, object] = {}
         exec(build.host_script, namespace)
-        replayed = namespace["document"]
-        self.assertIsInstance(replayed, list)
-        self.assertEqual(len(replayed), 1)
+        document = namespace["document"]
+        self.assertIsInstance(document, Document)
+        self.assertEqual(len(document.events), 1)
+        self.assertEqual(document.events[0].to_json()["call"]["head"], "bibstyle")
 
     def test_runtime_rejects_unsupported_invoked_object(self) -> None:
         session = runtime.RuntimeSession()
@@ -134,22 +255,22 @@ class DriverTests(unittest.TestCase):
         data = paragraph.to_json()
         self.assertEqual(data["children"][1]["kind"], "inline_expr")
         self.assertEqual(data["children"][1]["value"], 3)
-        self.assertIn("Total 3.", build.tex)
+        self.assertIn("Total 3.", build.target_text)
 
     def test_page_placeholders_lower_to_lualatex(self) -> None:
         build = build_document("Page [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ].\n", filename="test.mtx")
-        self.assertIn(r"\thepage{}", build.tex)
-        self.assertIn(r"\pageref{LastPage}", build.tex)
+        self.assertIn(r"\thepage{}", build.target_text)
+        self.assertIn(r"\pageref{LastPage}", build.target_text)
 
     def test_interpolated_code_block_page_placeholder_lowers_to_lualatex(self) -> None:
         build = build_document(
             "```$python\nprint('page [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ]')\n```\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\ttfamily\obeyspaces\obeylines", build.tex)
-        self.assertIn(r"\thepage{}", build.tex)
-        self.assertIn(r"\pageref{LastPage}", build.tex)
-        self.assertNotIn("PAGE.CURRENT", build.tex)
+        self.assertIn(r"\ttfamily\obeyspaces\obeylines", build.target_text)
+        self.assertIn(r"\thepage{}", build.target_text)
+        self.assertIn(r"\pageref{LastPage}", build.target_text)
+        self.assertNotIn("PAGE.CURRENT", build.target_text)
 
     def test_unsupported_symbolic_expression_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -190,8 +311,8 @@ class DriverTests(unittest.TestCase):
 
     def test_concrete_conditional_lowers_selected_branch(self) -> None:
         build = build_document("!? [$ False ]\nNo\n!?!\nYes\n!!?\n", filename="test.mtx")
-        self.assertIn("Yes", build.tex)
-        self.assertNotIn("No", build.tex)
+        self.assertIn("Yes", build.target_text)
+        self.assertNotIn("No", build.target_text)
 
     def test_unsupported_symbolic_conditional_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -223,24 +344,185 @@ class DriverTests(unittest.TestCase):
             "+++ align=left | align=right\nName | Score\nAda | 98\n+++\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\usepackage[letterpaper,landscape]{geometry}", build.tex)
-        self.assertIn(r"\section{Title}", build.tex)
-        self.assertIn(r"\begin{verbatim}", build.tex)
-        self.assertIn(r"\begin{tabular}", build.tex)
+        self.assertIn(r"\usepackage[letterpaper,landscape]{geometry}", build.target_text)
+        self.assertIn(r"\section{Title}", build.target_text)
+        self.assertIn(r"\begin{verbatim}", build.target_text)
+        self.assertIn(r"\begin{tabular}", build.target_text)
 
-    def test_basic_inline_markdown_lowers(self) -> None:
+    def test_basic_inline_fallback_lowers(self) -> None:
         build = build_document(
             "This is *em* and **strong** with `code` and [site](https://example.com).\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\emph{em}", build.tex)
-        self.assertIn(r"\textbf{strong}", build.tex)
-        self.assertIn(r"\texttt{code}", build.tex)
-        self.assertIn(r"\href{https://example.com}{site}", build.tex)
+        self.assertIn(r"\emph{em}", build.target_text)
+        self.assertIn(r"\textbf{strong}", build.target_text)
+        self.assertIn(r"\texttt{code}", build.target_text)
+        self.assertIn(r"\href{https://example.com}{site}", build.target_text)
 
-    def test_image_markdown_lowers(self) -> None:
+    def test_image_fallback_lowers(self) -> None:
         build = build_document("Logo ![MarkTeX](logo.png).\n", filename="test.mtx")
-        self.assertIn(r"\includegraphics{logo.png}", build.tex)
+        self.assertIn(r"\includegraphics{logo.png}", build.target_text)
+
+    def test_markdown_derived_marktex_block_shapes_lower(self) -> None:
+        build = build_document(
+            "Setext Title\n"
+            "============\n\n"
+            "3. third\n"
+            "4. fourth\n\n"
+            "- [x] done\n"
+            "- [ ] todo\n"
+            "  - nested [$ PAGE.CURRENT ]\n\n"
+            "> Quote with ~~strike~~.\n\n"
+            "---\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\section{Setext Title}", build.target_text)
+        self.assertIn(r"\begin{enumerate}", build.target_text)
+        self.assertIn(r"\setcounter{enumi}{2}", build.target_text)
+        self.assertIn(r"\item[{[x]}] done", build.target_text)
+        self.assertIn(r"\item[{[ ]}] todo", build.target_text)
+        self.assertIn(r"\thepage{}", build.target_text)
+        self.assertIn(r"\begin{quote}", build.target_text)
+        self.assertIn(r"\sout{strike}", build.target_text)
+        self.assertIn(r"\usepackage[normalem]{ulem}", build.target_text)
+        self.assertIn(r"\rule{\linewidth}{0.4pt}", build.target_text)
+
+    def test_nested_ordered_list_uses_matching_latex_counter(self) -> None:
+        build = build_document(
+            "1. outer\n"
+            "   3. inner\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\setcounter{enumii}{2}", build.target_text)
+        self.assertNotIn(r"\setcounter{enumi}{2}", build.target_text)
+
+    def test_ordered_list_beyond_lualatex_native_depth_fails(self) -> None:
+        with self.assertRaisesRegex(
+            MarkTeXError,
+            "ordered list nesting deeper than LuaLaTeX backend supports",
+        ):
+            build_document(
+                "1. a\n"
+                "   1. b\n"
+                "      1. c\n"
+                "         1. d\n"
+                "            1. e\n",
+                filename="test.mtx",
+            )
+
+    def test_pipe_table_alignment_and_inline_marktex_lower(self) -> None:
+        build = build_document(
+            "| Left | Center | Right |\n"
+            "| :--- | :----: | ----: |\n"
+            "| [$ PAGE.CURRENT ] | two [^note] | ~~gone~~ |\n\n"
+            "[^note]: Table note.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\begin{tabular}{l|c|r}", build.target_text)
+        self.assertIn(r"\thepage{}", build.target_text)
+        self.assertIn(r"two \footnotemark", build.target_text)
+        self.assertIn(r"\stepcounter{footnote}\footnotetext{Table note.}", build.target_text)
+        self.assertIn(r"\sout{gone}", build.target_text)
+
+    def test_pipe_table_wrong_cell_count_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, r"pipe table row has 1 cells; expected 2"):
+            build_document("| A | B |\n| - | - |\n| only |\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, r"pipe table row has 3 cells; expected 2"):
+            build_document("| A | B |\n| - | - |\n| one | two | three |\n", filename="test.mtx")
+
+    def test_fallback_fenced_code_unclosed_fails(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "unclosed code fence"):
+            build_document("~~~python\nx = 1\n", filename="test.mtx")
+
+    def test_reference_style_links_and_images_lower(self) -> None:
+        build = build_document(
+            "See [site][ref], [shortcut], and ![Logo][logo].\n\n"
+            "[ref]: https://example.com\n"
+            "[shortcut]: https://shortcut.example\n"
+            "[logo]: assets/logo.pdf\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\href{https://example.com}{site}", build.target_text)
+        self.assertIn(r"\href{https://shortcut.example}{shortcut}", build.target_text)
+        self.assertIn(r"\includegraphics{assets/logo.pdf}", build.target_text)
+
+    def test_conditional_link_reference_definition_does_not_leak(self) -> None:
+        build = build_document(
+            "!? [$ False ]\n"
+            "[ref]: https://branch.example\n"
+            "!!?\n"
+            "Outside [x][ref].\n",
+            filename="test.mtx",
+        )
+        self.assertNotIn(r"\href{https://branch.example}", build.target_text)
+        self.assertIn("Outside [x][ref].", build.target_text)
+
+    def test_root_link_reference_is_visible_in_child_containers(self) -> None:
+        build = build_document(
+            "[ref]: https://root.example\n\n"
+            "- [item][ref]\n\n"
+            "> [quote][ref]\n\n"
+            "!? [$ True ]\n"
+            "Branch [branch][ref].\n"
+            "!!?\n",
+            filename="test.mtx",
+        )
+        self.assertEqual(build.target_text.count(r"\href{https://root.example}"), 3)
+
+    def test_conditional_link_reference_shadows_parent_inside_branch(self) -> None:
+        build = build_document(
+            "[ref]: https://root.example\n\n"
+            "!? [$ True ]\n"
+            "[ref]: https://branch.example\n"
+            "Inside [x][ref].\n"
+            "!!?\n"
+            "Outside [x][ref].\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\href{https://branch.example}{x}", build.target_text)
+        self.assertIn(r"\href{https://root.example}{x}", build.target_text)
+
+    def test_reference_style_image_uses_scoped_definitions(self) -> None:
+        build = build_document(
+            "[logo]: root.pdf\n\n"
+            "!? [$ True ]\n"
+            "[logo]: branch.pdf\n"
+            "![Local][logo]\n"
+            "!!?\n"
+            "![Root][logo]\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\includegraphics{branch.pdf}", build.target_text)
+        self.assertIn(r"\includegraphics{root.pdf}", build.target_text)
+
+    def test_line_breaks_and_backslash_escapes_lower(self) -> None:
+        build = build_document(
+            "line\n"
+            "break\n"
+            "space  \n"
+            "break\n"
+            "slash\\\n"
+            "break\n"
+            r"\aliteral"
+            "\n"
+            r"\*literal\*"
+            "\n",
+            filename="test.mtx",
+        )
+        paragraph = build.document.blocks[0].to_json()
+        breaks = [child for child in paragraph["children"] if child["kind"] == "line_break"]
+        self.assertEqual([item["hard"] for item in breaks], [True, True, True, True, True, True])
+        self.assertIn(r"line\\break", build.target_text)
+        self.assertIn(r"space  \\", build.target_text)
+        self.assertIn("slashbreak", build.target_text)
+        self.assertIn("aliteral", build.target_text)
+        self.assertIn("*literal*", build.target_text)
+
+    def test_autolink_and_raw_html_are_plain_text(self) -> None:
+        build = build_document("<https://example.com>\n<div>raw</div>\n", filename="test.mtx")
+        self.assertNotIn(r"\href{https://example.com}", build.target_text)
+        self.assertIn("<https://example.com>", build.target_text)
+        self.assertIn("<div>raw</div>", build.target_text)
 
     def test_footnote_and_citation_lower(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -262,12 +544,12 @@ class DriverTests(unittest.TestCase):
                 encoding="utf-8",
             )
             build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
-        self.assertIn(r"\footnote{Footnote body.}", build.tex)
-        self.assertIn("[1]", build.tex)
-        self.assertIn(r"\section*{References}", build.tex)
-        self.assertIn("Donald Knuth", build.tex)
+        self.assertIn(r"\footnote{Footnote body.}", build.target_text)
+        self.assertIn("[1]", build.target_text)
+        self.assertIn(r"\section*{References}", build.target_text)
+        self.assertIn("Donald Knuth", build.target_text)
 
-    def test_markdown_footnote_and_note_citation_are_distinct(self) -> None:
+    def test_marktex_fallback_footnote_and_note_citation_are_distinct(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             directory = Path(raw_dir)
             (directory / "refs.bib").write_text(
@@ -284,12 +566,12 @@ class DriverTests(unittest.TestCase):
                 "!# bib: refs.bib\n"
                 "!# citestyle: chicago-notes\n"
                 "Footnote[^note] and citation [^ cite: Turing36 ].\n\n"
-                "[^note]: Markdown footnote body.\n",
+                "[^note]: MarkTeX fallback footnote body.\n",
                 encoding="utf-8",
             )
             build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
-        self.assertIn(r"\footnote{Markdown footnote body.}", build.tex)
-        self.assertIn(r"\footnote{Alan Turing. On Computable Numbers. 1936.}", build.tex)
+        self.assertIn(r"\footnote{MarkTeX fallback footnote body.}", build.target_text)
+        self.assertIn(r"\footnote{Alan Turing. On Computable Numbers. 1936.}", build.target_text)
 
     def test_table_cell_note_citation_is_deferred_after_tabular(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -309,8 +591,8 @@ class DriverTests(unittest.TestCase):
                 encoding="utf-8",
             )
             build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
-        self.assertIn(r"\footnotemark & ok \\", build.tex)
-        self.assertIn(r"\stepcounter{footnote}\footnotetext{Alan Turing. On Computable Numbers. 1936.}", build.tex)
+        self.assertIn(r"\footnotemark & ok \\", build.target_text)
+        self.assertIn(r"\stepcounter{footnote}\footnotetext{Alan Turing. On Computable Numbers. 1936.}", build.target_text)
 
     def test_citation_missing_bibliography_entry_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -330,7 +612,7 @@ class DriverTests(unittest.TestCase):
             "Claim[^note-1].\n\n[^note-1]: Footnote body.\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\footnote{Footnote body.}", build.tex)
+        self.assertIn(r"\footnote{Footnote body.}", build.target_text)
 
     def test_custom_bibliography_style_can_include_uncited_entries(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -348,8 +630,8 @@ class DriverTests(unittest.TestCase):
             source = directory / "paper.mtx"
             source.write_text("!# bib: refs.bib\n!# bibstyle: all.mtxbs\nNo cite.\n", encoding="utf-8")
             build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
-        self.assertIn(r"\section*{All Sources}", build.tex)
-        self.assertIn("[Knuth84]", build.tex)
+        self.assertIn(r"\section*{All Sources}", build.target_text)
+        self.assertIn("[Knuth84]", build.target_text)
 
     def test_bibtex_parser_reads_common_entry(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -389,9 +671,9 @@ class DriverTests(unittest.TestCase):
             "[^note]: Table footnote body.\n",
             filename="test.mtx",
         )
-        self.assertIn(r"Cell\footnotemark & ok \\", build.tex)
-        self.assertIn(r"\addtocounter{footnote}{-1}", build.tex)
-        self.assertIn(r"\stepcounter{footnote}\footnotetext{Table footnote body.}", build.tex)
+        self.assertIn(r"Cell\footnotemark & ok \\", build.target_text)
+        self.assertIn(r"\addtocounter{footnote}{-1}", build.target_text)
+        self.assertIn(r"\stepcounter{footnote}\footnotetext{Table footnote body.}", build.target_text)
 
     def test_multiple_table_cell_footnotes_defer_in_source_order(self) -> None:
         build = build_document(
@@ -400,9 +682,9 @@ class DriverTests(unittest.TestCase):
             "[^b]: Second note.\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\addtocounter{footnote}{-2}", build.tex)
-        first = build.tex.index(r"\stepcounter{footnote}\footnotetext{First note.}")
-        second = build.tex.index(r"\stepcounter{footnote}\footnotetext{Second note.}")
+        self.assertIn(r"\addtocounter{footnote}{-2}", build.target_text)
+        first = build.target_text.index(r"\stepcounter{footnote}\footnotetext{First note.}")
+        second = build.target_text.index(r"\stepcounter{footnote}\footnotetext{Second note.}")
         self.assertLess(first, second)
 
     def test_table_cell_undefined_footnote_fails(self) -> None:
@@ -448,9 +730,9 @@ class DriverTests(unittest.TestCase):
             "```python interp\nprint('[$ PAGE.CURRENT ]')\n```\n",
             filename="test.mtx",
         )
-        self.assertIn(r"\begin{verbatim}", build.tex)
-        self.assertIn("[$ PAGE.CURRENT ]", build.tex)
-        self.assertNotIn(r"\ttfamily\obeyspaces\obeylines", build.tex)
+        self.assertIn(r"\begin{verbatim}", build.target_text)
+        self.assertIn("[$ PAGE.CURRENT ]", build.target_text)
+        self.assertNotIn(r"\ttfamily\obeyspaces\obeylines", build.target_text)
 
     def test_compile_file_has_no_strict_or_schema_parameters(self) -> None:
         parameters = inspect.signature(compile_file).parameters
@@ -466,10 +748,15 @@ class DriverTests(unittest.TestCase):
             with self.subTest(source=source.name):
                 result = compile_file(
                     source,
-                    emits={ArtifactKind.TEX, ArtifactKind.AST, ArtifactKind.EIR, ArtifactKind.BACKEND_IR},
+                    emits={
+                        ArtifactKind.TARGET,
+                        ArtifactKind.AST,
+                        ArtifactKind.EIR,
+                        ArtifactKind.BACKEND_IR,
+                    },
                     out_dir=Path(tempfile.mkdtemp()),
                 )
-                self.assertIn(ArtifactKind.TEX, result.artifacts)
+                self.assertIn(ArtifactKind.TARGET, result.artifacts)
 
     def test_invalid_target_fails(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -488,13 +775,13 @@ class DriverTests(unittest.TestCase):
             "!? [$ False ]\nA\n!?!? [$ True ]\nB\n!?!? [$ False ]\nC\n!!?\n",
             filename="test.mtx",
         )
-        self.assertIn("B", build.tex)
-        self.assertNotIn("A", build.tex)
-        self.assertNotIn("C", build.tex)
+        self.assertIn("B", build.target_text)
+        self.assertNotIn("A", build.target_text)
+        self.assertNotIn("C", build.target_text)
 
     def test_host_block_without_language_defaults_python(self) -> None:
         build = build_document("$$$\nname = 'Ada'\n$$$\nHello [$ name ].\n", filename="test.mtx")
-        self.assertIn("Hello Ada.", build.tex)
+        self.assertIn("Hello Ada.", build.target_text)
 
     def test_non_python_host_block_fails(self) -> None:
         with self.assertRaisesRegex(MarkTeXError, "unsupported host block language"):
@@ -510,12 +797,12 @@ class DriverTests(unittest.TestCase):
 
     def test_heading_inline_content_is_lowered(self) -> None:
         build = build_document("# Hello *World* and `code`\n", filename="test.mtx")
-        self.assertIn(r"\section{Hello \emph{World} and \texttt{code}}", build.tex)
+        self.assertIn(r"\section{Hello \emph{World} and \texttt{code}}", build.target_text)
 
     def test_table_cell_inline_content_is_lowered(self) -> None:
         build = build_document("+++ A | B\nHeader | Value\n*em* | **bold**\n+++\n", filename="test.mtx")
-        self.assertIn(r"\emph{em}", build.tex)
-        self.assertIn(r"\textbf{bold}", build.tex)
+        self.assertIn(r"\emph{em}", build.target_text)
+        self.assertIn(r"\textbf{bold}", build.target_text)
 
     def test_heading_inline_diagnostic_span_points_to_token(self) -> None:
         with self.assertRaises(MarkTeXError) as caught:
@@ -581,11 +868,32 @@ class CliTests(unittest.TestCase):
             result = self.run_cli(str(source), "--emit", "all")
             self.assertEqual(result.returncode, 0)
             build_dir = Path(raw_dir) / "paper.mtxbuild"
+            self.assertTrue((build_dir / "paper.surface.json").exists())
             self.assertTrue((build_dir / "paper.host.py").exists())
             self.assertTrue((build_dir / "paper.ast.json").exists())
             self.assertTrue((build_dir / "paper.eir.json").exists())
             self.assertTrue((build_dir / "paper.backend-ir.json").exists())
             self.assertTrue((build_dir / "paper.tex").exists())
+
+    def test_cli_from_host(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            source = Path(raw_dir) / "paper.mtx"
+            build_dir = Path(raw_dir) / "build"
+            from_dir = Path(raw_dir) / "from-host"
+            source.write_text("Hello\n", encoding="utf-8")
+            first = self.run_cli(str(source), "--emit", "all", "--out-dir", str(build_dir))
+            self.assertEqual(first.returncode, 0)
+            second = self.run_cli(
+                "--from",
+                "host",
+                str(build_dir / "paper.host.py"),
+                "--emit",
+                "target",
+                "--out-dir",
+                str(from_dir),
+            )
+            self.assertEqual(second.returncode, 0)
+            self.assertTrue((from_dir / "paper.host.tex").exists())
 
     def test_json_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -615,13 +923,16 @@ class CliTests(unittest.TestCase):
             schema_result = self.run_cli(str(source), "--schema", "custom.toml")
             self.assertEqual(schema_result.returncode, 2)
             self.assertIn("unrecognized arguments: --schema", schema_result.stderr)
+            tex_result = self.run_cli(str(source), "--emit", "tex")
+            self.assertEqual(tex_result.returncode, 2)
+            self.assertIn("unsupported emit artifact: tex", tex_result.stderr)
 
     def test_cli_out_dir(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             out_dir = Path(raw_dir) / "custom_out"
             source.write_text("Hello\n", encoding="utf-8")
-            result = self.run_cli(str(source), "--emit", "tex", "--out-dir", str(out_dir))
+            result = self.run_cli(str(source), "--emit", "target", "--out-dir", str(out_dir))
             self.assertEqual(result.returncode, 0)
             self.assertTrue((out_dir / "paper.tex").exists())
 

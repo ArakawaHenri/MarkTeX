@@ -6,13 +6,18 @@ folded into this document and should not be used as implementation authority.
 
 MarkTeX 0.1 is a publishable Python package milestone, not the complete
 language 1.0. It provides the `marktex` package and the `mtxc` command. The
-compiler reads `.mtx` files and emits LuaLaTeX-oriented `.tex` files plus
-optional debug artifacts. It does not run LuaLaTeX and it does not build PDFs.
+compiler reads explicit pipeline-stage inputs and emits LuaLaTeX-oriented
+`.tex` files plus optional self-contained stage artifacts. It does not run
+LuaLaTeX and it does not build PDFs.
+LuaLaTeX is the current backend, not the definition of MarkTeX. The language
+contract is the MarkTeX surface syntax, MOS, canonical core objects, and state
+model; a backend is one possible lowering target.
 
 ## 1. Design Laws
 
-1. MarkTeX is a superset of base Markdown. V0 does not adopt Markdown extension
-   syntax as language law.
+1. MarkTeX owns its surface language. It includes Markdown-derived spellings,
+   but those spellings are MarkTeX syntax, not delegated Markdown
+   compatibility.
 2. `.mtx` is a script-shaped document. With host execution enabled, source
    files are trusted code.
 3. MOS, the MarkTeX Object Syntax, is the smallest call syntax needed to build
@@ -24,7 +29,11 @@ optional debug artifacts. It does not run LuaLaTeX and it does not build PDFs.
    values. It is not the LaTeX backend.
 7. The backend receives canonical document objects and emits target text. It
    never reparses `.mtx` source and never executes host code.
-8. Add, remove, or rename shorthand behavior through schema data. Do not modify
+8. LuaLaTeX is the first 0.1 target, not the language's identity. Future
+   targets such as Typst or Microsoft Office XML should lower the same
+   canonical MarkTeX document model, just as Rust is not defined by LLVM or
+   libc even though it commonly targets them.
+9. Add, remove, or rename shorthand behavior through schema data. Do not modify
    parser logic for tag-like surface changes.
 
 The central call model is:
@@ -44,10 +53,11 @@ not a global function.
 | --- | --- |
 | Python package `marktex` | Supported |
 | CLI `mtxc` | Supported |
-| Default `.tex` output | Supported |
+| Default target artifact | Supported; `.tex` for `lualatex` |
 | Target `lualatex` | Only accepted target |
 | PDF generation | Out of scope |
-| `--emit host|ast|eir|backend-ir|tex|all` | Supported |
+| `--from mtx|surface|host|ast|eir|backend-ir` | Supported; default `mtx`, no extension inference |
+| `--emit surface|host|ast|eir|backend-ir|target|all` | Supported |
 | `--diagnostic-format text|json` | Supported |
 | `--no-host` | Supported restricted mode |
 | MOS raw strings, frames, tuples, escapes, raw literals | Supported |
@@ -59,15 +69,15 @@ not a global function.
 | `PAGE.CURRENT` and `PAGE.TOTAL` placeholders | Supported inline and in `$` code fences |
 | Complex symbolic inline math | Diagnostic in LuaLaTeX backend |
 | Headings and paragraphs | Supported |
-| Basic inline Markdown | Supported subset |
+| Markdown-derived MarkTeX fallback syntax | Supported practical subset |
 | Ordinary and `$`-interpolated code fences | Supported subset |
 | Rich `+++` tables | Supported |
-| Markdown pipe tables | Planned |
+| Pipe tables with Markdown-style spelling | Supported fallback syntax |
 | Footnotes | Supported single-line definitions |
 | Explicit citation references | Supported through citation styles |
 | Bibliography backend | Supported BibTeX subset with `.mtxcs`/`.mtxbs` styles |
 | Conditionals | Concrete bool and `PAGE.CURRENT == PAGE.TOTAL` supported |
-| Full Markdown dialect compatibility | Planned |
+| Direct Markdown dialect compatibility | Out of scope; autolink and raw HTML semantics are not supported |
 
 ## 3. Package And CLI
 
@@ -106,19 +116,27 @@ Common forms:
 mtxc paper.mtx -o output.tex
 mtxc paper.mtx -o -
 mtxc paper.mtx --target lualatex
-mtxc paper.mtx --emit ast --emit eir --emit tex --out-dir build/
+mtxc paper.mtx --emit surface --emit ast --emit eir --emit target --out-dir build/
 mtxc paper.mtx --emit all
+mtxc --from host build/paper.host.py --emit ast --emit target --out-dir build2/
+mtxc --from ast build/paper.ast.json --emit backend-ir --emit target
+mtxc --from backend-ir build/paper.backend-ir.json --emit target
 mtxc paper.mtx --no-host
 mtxc paper.mtx --diagnostic-format json
 ```
 
 `-o -` writes a single text artifact to stdout. It is invalid with multiple
 artifacts. `--emit pdf` is invalid because `mtxc` is not a PDF build driver.
-Any target other than `lualatex` is invalid in 0.1.
+Any target other than `lualatex` is invalid in 0.1. `--from` is a required
+semantic label when input is not `.mtx`; `mtxc` does not infer a stage from the
+file extension. For example, `--from ast paper.backend-ir.json` fails because
+the artifact envelope kind is `backend-ir`, not `ast`.
 
-Artifact names are deterministic:
+Artifact names are deterministic. For the `lualatex` target, the target
+artifact uses `.tex`:
 
 ```text
+paper.surface.json
 paper.host.py
 paper.ast.json
 paper.eir.json
@@ -133,45 +151,61 @@ Public driver API:
 
 ```python
 from pathlib import Path
-from marktex.driver import ArtifactKind, compile_file
+from marktex.driver import ArtifactKind, InputStage, compile_file
 
 compile_file(
     Path("paper.mtx"),
-    emits={ArtifactKind.TEX},
+    emits={ArtifactKind.TARGET},
     output_path=None,
     out_dir=None,
     target="lualatex",
+    from_stage=InputStage.MTX,
     no_host=False,
 )
 ```
 
 ## 4. Compiler Pipeline
 
-The V0 architecture is:
+The 0.1 architecture is an explicit, forward-only compiler pipeline:
 
 ```text
 .mtx source
--> SurfaceDocument
--> MOS CallUnit objects
--> Python host environment
--> canonical Document
--> EIR debug view
--> LuaLaTeX backend IR
--> .tex
+-> surface artifact
+-> host.py construction artifact
+-> canonical AST artifact
+-> EIR artifact
+-> backend IR artifact
+-> target artifact
 ```
 
-The `host` artifact is an executable replay of document and scope events. User
-host blocks that ran during compilation are retained as comments for inspection;
-they are not rerun by the replay artifact. The long-term architecture also
-treats generated host script as the complete construction artifact:
+Every JSON artifact has the same envelope:
 
 ```text
-.mtx -> CST -> Surface AST / CallUnit -> generated host script
-     -> canonical AST/EIR -> backend IR -> .tex
+{
+  "kind": "surface|ast|eir|backend-ir",
+  "marktex_version": "...",
+  "artifact_version": 1,
+  "payload": { ... }
+}
 ```
 
-The 0.1 driver executes a Python host environment directly while building the
-document, and emits a deterministic event replay artifact for inspection.
+The `surface` artifact contains recognized MarkTeX surface nodes, source spans,
+and the original source text needed for accurate inline lowering. The `host.py`
+artifact is an executable construction script; from `.mtx` input, the compiler
+generates this script and executes it to obtain the canonical `Document`. It is
+trusted Python, and `--from host` is therefore equivalent to executing that
+artifact. `--from host --no-host` is invalid.
+
+The `ast` artifact stores the canonical `Document`. The `eir` artifact stores
+that document plus state log/scope state. The `backend-ir` artifact stores the
+target, lowered document snapshot, and bibliography/style snapshot; target
+emission from backend IR does not read the original `.mtx`, `.bib`, `.mtxcs`,
+or `.mtxbs` files.
+
+The only implemented 0.1 target is LuaLaTeX, but the boundary is intentionally
+backend-shaped: a future Typst backend, Office Open XML backend, or other
+renderer should consume the canonical document objects rather than redefining
+the source language.
 
 Implementation modules:
 
@@ -191,8 +225,11 @@ src/marktex/backend/lualatex/      LuaLaTeX lowering
 ## 5. Surface Recognition
 
 The 0.1 parser is deliberately thin and line oriented. It recognizes MarkTeX
-controls at column zero of a physical line. Leading spaces make the line
-ordinary Markdown/prose for 0.1.
+controls at column zero of a physical line. Chunks not claimed by those
+controls are parsed by MarkTeX's private fallback parser and immediately
+lowered to ordinary MarkTeX AST nodes. This is analogous to C++ owning syntax
+that originated in C: the spelling may be familiar, but the language contract
+is MarkTeX's.
 
 Recognition order:
 
@@ -204,9 +241,7 @@ Recognition order:
 6. Scope close `!!@`.
 7. Document directive `!#`.
 8. Scope open `!@`.
-9. Markdown heading.
-10. Blank line.
-11. Paragraph text.
+9. MarkTeX fallback blocks and inline content.
 
 `!!@` must be checked before `!@`, and `!?!?` before `!?`, because these forms
 share prefixes.
@@ -252,8 +287,9 @@ Rules:
 - `;` closes exactly one open call frame; at root it ends the current unit.
 - `=` binds one named parameter.
 - `(...)` creates a tuple-like structured value.
-- `\x` produces literal `x`.
-- `\` followed by a physical newline produces one literal space.
+- `\x` produces literal `x` for any following character `x`.
+- `\` followed by a physical newline produces nothing; it is line
+  continuation, not a space.
 - `` `...` `` creates a forced raw literal. Structural characters and keyword
   matches inside it are inactive.
 - Only call heads and parameter names are trimmed for matching.
@@ -469,12 +505,18 @@ marktex.scope_push(key, *args, scope="DEFAULT", **kwargs)
 marktex.scope_close(key="")
 marktex.invoke(event)
 marktex.finish()
+marktex.document(events=(), blocks=(), footnotes=())
+marktex.paragraph(*children)
+marktex.heading(level, *children)
+marktex.table(columns, header, rows=())
+marktex.footnote_definition(label, *children)
 ```
 
 `marktex.invoke()` accepts only `DocumentPatch`, `ScopePush`, and `ScopeClose`
 objects in 0.1. Runtime constructors normalize Python values into MOS values:
 strings become raw MOS strings, tuples and lists become MOS tuples, and nested
-calls must be written with `marktex.call(...)`.
+calls must be written with `marktex.call(...)`. Construction helpers return
+canonical core objects and are used by executable host artifacts.
 
 `PAGE.CURRENT` and `PAGE.TOTAL` are symbolic values. They are never concrete
 during host execution.
@@ -529,33 +571,55 @@ Complex symbolic inline expressions are preserved as symbolic objects, but the
 Remaining [$ PAGE.TOTAL - PAGE.CURRENT ] pages.
 ```
 
-is valid V0 directionally, but unsupported by the 0.1 LuaLaTeX backend.
+is valid 0.1 directionally, but unsupported by the 0.1 LuaLaTeX backend.
 
-## 11. Markdown Subset
+## 11. MarkTeX Fallback Syntax
 
-0.1 supports a small, explicit Markdown subset:
+0.1 supports practical Markdown-derived spellings as MarkTeX fallback syntax.
+This is not a public Markdown adapter layer and it is not a direct promise of
+Markdown dialect compatibility: MarkTeX controls are recognized first, then
+unclaimed text chunks are parsed and converted directly to MarkTeX AST.
 
 - ATX headings `#` through `######`;
+- setext headings;
 - paragraphs separated by blank lines;
-- ordinary backtick code fences;
-- inline emphasis `*text*`;
-- inline strong `**text**`;
+- fenced and indented code blocks;
+- unordered, ordered, nested, loose, and tight lists;
+- task list markers `- [ ]` and `- [x]`;
+- block quotes;
+- thematic breaks;
+- pipe tables with an alignment row;
+- inline emphasis `*text*` and `_text_`;
+- inline strong `**text**` and `__text__`;
 - inline code `` `text` ``;
+- strikethrough `~~text~~`;
 - links `[label](url)`;
 - images `![alt](src)`;
+- reference-style links and images;
+- backslash escapes;
+- physical line breaks;
+- backslash line continuation;
 - footnote references `[^label]`;
 - single-line footnote definitions `[^label]: body`.
 
 Not supported in 0.1:
 
-- Markdown lists as typed list nodes;
-- block quotes as typed quote nodes;
-- Markdown pipe tables;
-- nested or escaped delimiter behavior beyond the simple subset above;
+- autolink semantics such as `<https://example.com>`;
+- raw/block/inline HTML semantics;
+- HTML entity decoding as HTML behavior;
 - full CommonMark conformance.
 
-Unsupported Markdown usually remains paragraph text unless it collides with a
-recognized MarkTeX form that has to be diagnosed.
+Autolinks and raw HTML remain escaped document text. Unsupported
+Markdown-derived spelling usually remains paragraph text unless it collides
+with a recognized MarkTeX form that has to be diagnosed.
+
+Reference-style link and image definitions are MarkTeX fallback declarations,
+not a Markdown global pre-scan. Root definitions are visible to root content
+and child containers such as lists, block quotes, and conditional branches.
+Definitions inside a conditional branch are visible only inside that branch and
+may shadow root definitions there. Definitions inside child containers are
+local to that container and may shadow inherited definitions for their own
+children.
 
 ## 12. Code Blocks
 
@@ -584,6 +648,8 @@ placeholders inside the displayed code block.
 
 Only a `$` prefix enables code interpolation. An info string such as
 `` ```python interp `` is just an ordinary code-fence language string.
+Both top-level backtick fences and fallback fences report `unclosed code fence`
+when the closing fence is missing.
 
 ## 13. Rich Tables
 
@@ -610,11 +676,15 @@ Rules:
 - Every row must have the same number of cells as there are column specs.
 - Literal `|` is written as `\|`.
 
-The 0.1 LuaLaTeX backend emits a simple `tabular` with left-aligned columns.
-Column MOS is preserved in AST/EIR but only minimally lowered in 0.1.
+The 0.1 LuaLaTeX backend emits a simple `tabular`. Column MOS alignment lowers
+to `l`, `c`, or `r` when the column spec provides `align=left|center|right`.
 
-Markdown pipe tables are planned separately. They are not the rich table
-syntax.
+Pipe tables use Markdown-style spelling as MarkTeX fallback syntax and lower
+to the same `Table` core object. Their alignment row is converted into
+table-column metadata before backend lowering. Header and body rows must have
+exactly the same number of cells as the alignment row; MarkTeX does not
+silently pad or truncate pipe table rows. Pipe tables are not rich table
+syntax, even though both become the same core `Table` object.
 
 ## 14. References, Footnotes, And Citations
 
@@ -631,7 +701,7 @@ Definitions are single-line in 0.1. An undefined footnote reference is a
 backend diagnostic.
 
 In LuaLaTeX output, ordinary inline footnote references lower to `\footnote`.
-Footnote references inside rich table cells lower to a table-safe
+Footnote references inside table cells lower to a table-safe
 `\footnotemark`, with matching `\footnotetext` emitted immediately after the
 `tabular`.
 
@@ -650,9 +720,10 @@ positional args become citation keys, and raw kwargs become citation options.
 The backend resolves each key against active BibTeX resources and renders the
 in-text citation through the active `.mtxcs` citation style.
 
-Markdown footnotes and bibliography citations are deliberately separate:
+MarkTeX footnotes using Markdown-style spelling and bibliography citations are
+deliberately separate:
 
-- `[^note]` always lowers as a Markdown-style footnote;
+- `[^note]` always lowers as a MarkTeX footnote using Markdown-style spelling;
 - `[^ cite: Key ]` always lowers through the active citation style, even when
   that style is footnote-based.
 
@@ -759,7 +830,9 @@ Text
 InlineExpression
 Emphasis
 Strong
+Strikethrough
 InlineCode
+LineBreak
 Link
 Image
 FootnoteRef
@@ -770,6 +843,10 @@ CodeText
 CodeExpression
 CodeBlock
 Table
+ListBlock
+ListItem
+BlockQuote
+ThematicBreak
 Conditional
 FootnoteDefinition
 DocumentPatch
@@ -786,7 +863,7 @@ ScopePush
 ScopeClose
 ```
 
-The EIR debug artifact contains:
+The EIR artifact payload contains:
 
 ```json
 {
@@ -808,8 +885,9 @@ language feature.
 
 ## 17. LuaLaTeX Backend
 
-`mtxc` emits a self-contained `.tex` file oriented to LuaLaTeX. The 0.1
-preamble uses:
+LuaLaTeX is the first concrete backend and the only accepted 0.1 `--target`.
+It is an implementation target, not MarkTeX's semantic core. `mtxc` emits a
+self-contained `.tex` file oriented to LuaLaTeX. The 0.1 preamble uses:
 
 ```latex
 \documentclass{article}
@@ -829,21 +907,33 @@ Lowering support:
 - paragraphs -> escaped LaTeX text;
 - emphasis -> `\emph`;
 - strong -> `\textbf`;
+- strikethrough -> `\sout` with `ulem` loaded only when needed;
 - inline code -> `\texttt`;
+- physical line breaks -> `\\`;
 - links -> `\href`;
 - images -> `\includegraphics`;
 - ordinary footnotes -> `\footnote`;
-- rich table cell footnotes -> `\footnotemark` plus deferred `\footnotetext`
+- table cell footnotes -> `\footnotemark` plus deferred `\footnotetext`
   after the `tabular`;
 - citations -> active `.mtxcs` citation style;
 - references -> active `.mtxbs` bibliography style, appended when non-empty;
 - ordinary code blocks -> `verbatim`;
 - `$`-interpolated code blocks -> escaped `\ttfamily` text with live lowered
   page placeholders;
-- rich tables -> simple `tabular`;
+- rich and pipe tables -> simple `tabular`;
+- lists -> `itemize` or `enumerate`;
+- task list items -> explicit `[ ]` or `[x]` item labels;
+- block quotes -> `quote`;
+- thematic breaks -> horizontal rules;
 - `PAGE.CURRENT` -> `\thepage{}`;
 - `PAGE.TOTAL` -> `\pageref{LastPage}`;
 - `PAGE.CURRENT == PAGE.TOTAL` conditionals -> a page/last-page test.
+
+The `tight` flag on list AST nodes is preserved, but the 0.1 LuaLaTeX backend
+maps tight and loose lists to the same `itemize` / `enumerate` spacing. Ordered
+list starts lower by setting the active LaTeX enumerate counter
+(`enumi`, `enumii`, `enumiii`, or `enumiv`). Ordered list nesting deeper than
+LaTeX's four native enumerate levels is a backend diagnostic.
 
 Unsupported backend objects must raise diagnostics. They must not be silently
 dropped and must not be emitted as raw TeX by convenience fallback.
@@ -894,6 +984,7 @@ Examples that must fail:
 - unclosed host block;
 - unclosed rich table;
 - rich table row with wrong cell count;
+- pipe table row with wrong cell count;
 - unmatched scope close;
 - unclosed conditional;
 - unsupported symbolic inline expression in LuaLaTeX backend;
@@ -1013,26 +1104,27 @@ lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-
 0.1 changelog:
 
 - Add the `marktex` Python package and `mtxc` CLI.
-- Generate LuaLaTeX-oriented `.tex` output by default.
-- Add debug artifact emission for host script, AST, EIR, backend IR, and TeX.
+- Generate the selected backend target artifact by default.
+- Add self-contained pipeline artifact emission for surface, host script, AST,
+  EIR, backend IR, and target output.
 - Implement schema-driven MOS value shading.
-- Support headings, paragraphs, code fences, rich tables, basic inline
-  Markdown, footnotes, citation placeholders, simple conditionals, and page
+- Support headings, paragraphs, code fences, lists, block quotes, thematic
+  breaks, rich tables, pipe tables, practical inline Markdown-derived MarkTeX
+  syntax, footnotes, citation placeholders, simple conditionals, and page
   placeholders.
 - Add `--no-host` and JSON diagnostics.
 
 ## 22. Roadmap
 
-Planned V0 work after 0.1:
+Planned work after 0.1:
 
 - external additive schema loading;
-- fuller Markdown block support through a proper Markdown parser boundary;
-- Markdown pipe table fallback;
+- hardening rare CommonMark delimiter and container edge cases in the private
+  fallback parser;
 - backend lowering for scope-driven typography;
 - fuller APA/MLA/Chicago bibliography rule coverage;
 - symbolic inline arithmetic such as `PAGE.TOTAL - PAGE.CURRENT`;
 - richer symbolic conditionals;
-- full generated host script as the exact replayable AST construction path;
 - optional PDF build driver outside `mtxc`, if a separate tool is desired.
 
 The core philosophy should not change: keep syntax thin, keep parser mechanics

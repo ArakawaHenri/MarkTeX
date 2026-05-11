@@ -2,13 +2,19 @@
 
 # MarkTeX
 
-MarkTeX is a base Markdown superset for programmable documents that compile to
-LuaLaTeX-oriented `.tex` files.
+MarkTeX is a programmable document language with Markdown-derived surface
+spellings. LuaLaTeX-oriented `.tex` output is the current backend target, not
+the language definition.
 
 The current package milestone is `0.1`: installable Python package, `mtxc` CLI,
-MOS call syntax, Python host runtime, canonical debug artifacts, a BibTeX-backed
-citation style layer, and a thin LuaLaTeX backend. `mtxc` does not run LuaLaTeX
-and does not build PDFs.
+MOS call syntax, Python host runtime, self-contained pipeline artifacts, a private
+MarkTeX fallback parser for Markdown-derived spellings, a BibTeX-backed
+citation style layer, and a thin LuaLaTeX backend. `mtxc` does not run
+LuaLaTeX and does not build PDFs.
+
+The core contract is MarkTeX syntax, MOS, canonical document objects, and the
+state model. Future backends can target Typst, Microsoft Office XML, or other
+renderers without changing what `.mtx` means.
 
 The single canonical documentation entry is
 [`docs/marktex-0.1.md`](docs/marktex-0.1.md).
@@ -20,13 +26,16 @@ uv tool install .
 mtxc paper.mtx
 ```
 
-By default this writes `paper.tex`. Debug artifacts are available with
-`--emit`:
+By default this reads from the `mtx` stage and writes `paper.tex`. Pipeline
+artifacts are available with `--emit`, and any emitted stage can be used as a
+later input with explicit `--from`:
 
 ```bash
 mtxc paper.mtx -o output.tex
 mtxc paper.mtx --emit all
-mtxc paper.mtx --emit ast --emit eir --emit tex --out-dir build/
+mtxc paper.mtx --emit ast --emit eir --emit target --out-dir build/
+mtxc --from host build/paper.host.py --emit ast --emit target --out-dir build2/
+mtxc --from backend-ir build/paper.backend-ir.json --emit target
 mtxc paper.mtx --no-host
 mtxc paper.mtx --diagnostic-format json
 ```
