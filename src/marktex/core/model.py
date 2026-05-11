@@ -309,6 +309,31 @@ class ThematicBreak:
 
 
 @dataclass(frozen=True)
+class PageBreak:
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {"kind": "page_break", "origin": _origin(self.origin)}
+
+
+@dataclass(frozen=True)
+class PageSetup:
+    width: str
+    height: str
+    margins: dict[str, str] = field(default_factory=dict)
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "kind": "page_setup",
+            "width": self.width,
+            "height": self.height,
+            "margins": dict(self.margins),
+            "origin": _origin(self.origin),
+        }
+
+
+@dataclass(frozen=True)
 class ConditionalBranch:
     condition: Any
     body: tuple["Block", ...]
@@ -388,7 +413,16 @@ class ScopeClose:
 
 
 Block: TypeAlias = (
-    Paragraph | Heading | CodeBlock | Table | ListBlock | BlockQuote | ThematicBreak | Conditional
+    Paragraph
+    | Heading
+    | CodeBlock
+    | Table
+    | ListBlock
+    | BlockQuote
+    | ThematicBreak
+    | PageBreak
+    | PageSetup
+    | Conditional
 )
 MarkTeXObject: TypeAlias = DocumentPatch | ScopePush | ScopeClose | Block | InlineNode
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from marktex.bibliography.model import BibliographyStyle, CitationStyle
 from marktex.mos import CallUnit, RawString, parse_mos
+from marktex.semantics import CITATION_STYLE_FORMS, CITATION_STYLE_MODES, normalize_choice
 from marktex.source import MarkTeXError
 
 
@@ -90,19 +91,30 @@ def parse_citation_style(source: str, label: str) -> CitationStyle:
     delimiter = "; "
     year_separator = ", "
     locator_prefix = ", "
+    form_was_explicit = False
     for call in parse_mos(source, context="citation-style", filename=label):
         if call.head == "style":
+            validate_no_args(call)
+            validate_kwargs(call, {"name"})
             name = raw_kw(call, "name") or name
         elif call.head == "citation":
+            validate_no_args(call)
+            validate_kwargs(call, {"mode", "form", "delimiter", "year-separator", "locator-prefix"})
             mode = raw_kw(call, "mode") or mode
-            form = raw_kw(call, "form") or form
+            explicit_form = raw_kw(call, "form")
+            if explicit_form is not None:
+                form = explicit_form
+                form_was_explicit = True
             delimiter = raw_kw(call, "delimiter", preserve_raw=True) or delimiter
             year_separator = raw_kw(call, "year-separator", preserve_raw=True) or year_separator
             locator_prefix = raw_kw(call, "locator-prefix", preserve_raw=True) or locator_prefix
         else:
             raise MarkTeXError(f"unknown citation style call: {call.head}", call.origin)
-    validate_choice("citation mode", mode, {"numeric", "author-year", "author-page", "note"})
-    validate_choice("citation form", form, {"square", "superscript", "paren", "footnote", "plain"})
+    mode = normalize_choice(mode, CITATION_STYLE_MODES, "citation mode")
+    if mode == "note" and not form_was_explicit:
+        form = "footnote"
+    form = normalize_choice(form, CITATION_STYLE_FORMS, "citation form")
+    validate_citation_style_pair(mode, form)
     return CitationStyle(name, mode, form, delimiter, year_separator, locator_prefix)
 
 
@@ -116,8 +128,12 @@ def parse_bibliography_style(source: str, label: str) -> BibliographyStyle:
     templates: dict[str, tuple[str, ...]] = {}
     for call in parse_mos(source, context="bibliography-style", filename=label):
         if call.head == "style":
+            validate_no_args(call)
+            validate_kwargs(call, {"name"})
             name = raw_kw(call, "name") or name
         elif call.head == "references":
+            validate_no_args(call)
+            validate_kwargs(call, {"title", "include", "sort", "placement", "label"})
             title = raw_kw(call, "title") or title
             include = raw_kw(call, "include") or include
             sort = raw_kw(call, "sort") or sort
@@ -128,14 +144,16 @@ def parse_bibliography_style(source: str, label: str) -> BibliographyStyle:
             templates[entry_type] = fields
         else:
             raise MarkTeXError(f"unknown bibliography style call: {call.head}", call.origin)
-    validate_choice("references include", include, {"cited", "all"})
-    validate_choice("references sort", sort, {"citation-order", "author-year", "author-title", "key"})
-    validate_choice("references placement", placement, {"new-page", "inline"})
-    validate_choice("references label", label_style, {"numeric", "key", "none"})
+    include = normalize_choice(include, frozenset(("cited", "all")), "references include")
+    sort = normalize_choice(sort, frozenset(("citation-order", "author-year", "author-title", "key")), "references sort")
+    placement = normalize_choice(placement, frozenset(("new-page", "inline")), "references placement")
+    label_style = normalize_choice(label_style, frozenset(("numeric", "key", "none")), "references label")
     return BibliographyStyle(name, title, include, sort, placement, label_style, templates)
 
 
 def parse_template(call: CallUnit) -> tuple[str, tuple[str, ...]]:
+    if call.kwargs:
+        raise MarkTeXError("bibliography template does not accept named arguments", call.origin)
     values = [raw_arg(arg) for arg in call.args]
     if not values or values[0] is None:
         raise MarkTeXError("bibliography template requires an entry type", call.origin)
@@ -164,3 +182,21 @@ def validate_choice(label: str, value: str, allowed: set[str]) -> None:
     if value not in allowed:
         expected = ", ".join(sorted(allowed))
         raise MarkTeXError(f"unsupported {label}: {value}; expected one of {expected}")
+
+
+def validate_no_args(call: CallUnit) -> None:
+    if call.args:
+        raise MarkTeXError(f"{call.head} does not accept positional arguments", call.origin)
+
+
+def validate_kwargs(call: CallUnit, allowed: set[str]) -> None:
+    unknown = sorted(set(call.kwargs) - allowed)
+    if unknown:
+        raise MarkTeXError(f"unknown kwargs for {call.head!r}: {', '.join(unknown)}", call.origin)
+
+
+def validate_citation_style_pair(mode: str, form: str) -> None:
+    if mode == "note" and form != "footnote":
+        raise MarkTeXError("citation mode note requires form footnote")
+    if mode != "note" and form == "footnote":
+        raise MarkTeXError("citation form footnote requires mode note")

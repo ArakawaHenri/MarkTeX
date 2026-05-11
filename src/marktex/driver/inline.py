@@ -17,6 +17,7 @@ from marktex.core import (
 )
 from marktex.host.python import PythonHost
 from marktex.mos import RawString, parse_mos
+from marktex.semantics import CITATION_KWARGS
 from marktex.source import MarkTeXError, SourceSpan
 from marktex.surface.grammar import is_footnote_label
 
@@ -224,6 +225,8 @@ class _InlineParser:
         destination = normalize_link_destination(self.text[label_end + 2 : close])
         if not destination:
             return None
+        if link_destination_has_title(self.text[label_end + 2 : close]):
+            raise MarkTeXError("unsupported link title", self.token_span(label_end + 1, close + 1))
         return destination, close + 1
 
     def reference_target_after(
@@ -321,6 +324,13 @@ def normalize_link_destination(raw: str) -> str:
     return text.split()[0] if text.split() else ""
 
 
+def link_destination_has_title(raw: str) -> bool:
+    text = raw.strip()
+    if text.startswith("<") and ">" in text:
+        return bool(text[text.index(">") + 1 :].strip())
+    return len(text.split()) > 1
+
+
 def normalize_reference_label(label: str) -> str:
     return " ".join(label.split()).casefold()
 
@@ -366,6 +376,8 @@ def reference_node(payload: str, origin: SourceSpan) -> FootnoteRef | Citation:
             if isinstance(arg, RawString):
                 keys.append(arg.text.strip())
         for key, value in calls[0].kwargs.items():
+            if key not in CITATION_KWARGS:
+                raise MarkTeXError(f"unknown citation kwargs: {key}", origin)
             if isinstance(value, RawString):
                 kwargs[key] = value.text.strip()
         if not keys:

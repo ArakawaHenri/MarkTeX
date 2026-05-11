@@ -34,6 +34,7 @@ def builtin_registry() -> SchemaRegistry:
                     "bib-": CallSpec("bib-", "resource_remove", invokable=True),
                     "bibstyle": CallSpec("bibstyle", "document_patch", invokable=True),
                     "citestyle": CallSpec("citestyle", "document_patch", invokable=True),
+                    "newpage": CallSpec("newpage", "page_break", accepts_raw_args=False),
                 },
             ),
             "layout.value": ContextSpec("layout.value", shade=LAYOUT_VALUE_SHADES),

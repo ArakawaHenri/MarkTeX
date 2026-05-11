@@ -26,6 +26,8 @@ from marktex.core import (
     Link,
     ListBlock,
     ListItem,
+    PageBreak,
+    PageSetup,
     Paragraph,
     Strong,
     Strikethrough,
@@ -36,6 +38,7 @@ from marktex.core import (
 from marktex.core import object_to_json
 from marktex.host.python.symbolic import SymbolicExpr, SymbolicValue
 from marktex.mos import CallUnit, RawString
+from marktex.semantics import MARGIN_KEYS, PageLayout, canonicalize_document
 from marktex.source import MarkTeXError, SourceSpan
 
 
@@ -62,7 +65,7 @@ def emit_lualatex_from_backend_ir(backend_ir: dict[str, object]) -> str:
     target = backend_ir.get("target")
     if target != "lualatex":
         raise MarkTeXError(f"backend-ir target is {target!r}, not 'lualatex'")
-    document = document_from_json(backend_ir.get("document"))
+    document = canonicalize_document(document_from_json(backend_ir.get("document")))
     bibliography = backend_ir.get("bibliography")
     if bibliography is not None and not isinstance(bibliography, dict):
         raise MarkTeXError("backend-ir bibliography snapshot is invalid")
@@ -134,6 +137,10 @@ class LuaLaTeXEmitter:
             return self.emit_blockquote(block, list_depth=list_depth)
         if isinstance(block, ThematicBreak):
             return [r"\par\noindent\rule{\linewidth}{0.4pt}\par"]
+        if isinstance(block, PageBreak):
+            return [r"\clearpage"]
+        if isinstance(block, PageSetup):
+            return emit_page_setup(block)
         if isinstance(block, Conditional):
             return self.emit_conditional(block, list_depth=list_depth)
         raise MarkTeXError(f"unsupported block for LuaLaTeX backend: {block!r}")
@@ -348,24 +355,44 @@ class LuaLaTeXEmitter:
 
 
 def layout_options(document: Document) -> list[str]:
-    options: list[str] = []
+    layout = PageLayout()
+    touched = False
     for event in document.events:
         if isinstance(event, DocumentPatch) and event.call.head == "layout":
-            for arg in event.call.args:
-                if isinstance(arg, CallUnit):
-                    paper = raw_kw(arg, "paper")
-                    orientation = raw_kw(arg, "orientation")
-                    if paper and paper not in options:
-                        options.append(paper)
-                    if orientation and orientation != "portrait" and orientation not in options:
-                        options.append(orientation)
-                elif isinstance(arg, RawString):
-                    raw = arg.text.strip().lower()
-                    if raw in {"a4", "a4paper"} and "a4paper" not in options:
-                        options.append("a4paper")
-                    elif raw == "landscape" and "landscape" not in options:
-                        options.append("landscape")
+            width = raw_kw(event.call, "width")
+            height = raw_kw(event.call, "height")
+            if width is not None and height is not None:
+                layout = layout.with_size(width, height)
+                touched = True
+            margins = {
+                key: value
+                for key in MARGIN_KEYS
+                if (value := raw_kw(event.call, key)) is not None
+            }
+            if margins:
+                layout = layout.with_margins(margins)
+                touched = True
+        elif isinstance(event, DocumentPatch) and event.call.head == "margin":
+            margins = {
+                key: value
+                for key in MARGIN_KEYS
+                if (value := raw_kw(event.call, key)) is not None
+            }
+            if margins:
+                layout = layout.with_margins(margins)
+                touched = True
+    return geometry_options(layout) if touched else []
+
+
+def geometry_options(layout: PageLayout) -> list[str]:
+    options = [f"paperwidth={layout.width}", f"paperheight={layout.height}"]
+    options.extend(f"{key}={value}" for key, value in layout.margin_dict().items())
     return options
+
+
+def emit_page_setup(block: PageSetup) -> list[str]:
+    layout = PageLayout(block.width, block.height, block.margins)
+    return [r"\clearpage", r"\newgeometry{" + ",".join(geometry_options(layout)) + "}"]
 
 
 def raw_kw(call: CallUnit, key: str) -> str | None:
@@ -379,7 +406,10 @@ def column_alignment(call: CallUnit) -> str:
     align = raw_kw(call, "align")
     if align is None:
         return "l"
-    return {"left": "l", "center": "c", "right": "r"}.get(align.strip().lower(), "l")
+    normalized = align.strip().lower()
+    if normalized not in {"left", "center", "right"}:
+        raise MarkTeXError(f"unsupported table column alignment: {align}", call.origin)
+    return {"left": "l", "center": "c", "right": "r"}[normalized]
 
 
 def document_uses_strikethrough(document: Document) -> bool:

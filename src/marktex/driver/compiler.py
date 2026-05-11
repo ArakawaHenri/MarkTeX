@@ -27,6 +27,8 @@ from marktex.core import (
     ListBlock,
     ListItem,
     MarkTeXObject,
+    PageBreak,
+    PageSetup,
     Paragraph,
     ScopeClose,
     ScopePush,
@@ -42,6 +44,15 @@ from marktex.driver.serde import (
 from marktex.host.python import PythonHost, SymbolicValue, emit_host_script
 from marktex.mos import CallUnit, MosValue, RawString, TupleValue, parse_mos
 from marktex.schema import SchemaRegistry, builtin_registry
+from marktex.scope import DEFAULT_SCOPE_TARGET, scope_target_from_kwargs
+from marktex.semantics import (
+    DocumentDirectiveResult,
+    PageLayout,
+    canonicalize_document,
+    canonicalize_table_column,
+    page_setup_from_layout,
+    plan_document_directive_call,
+)
 from marktex.source import MarkTeXError, SourceSpan
 from marktex.state import StateEngine
 from marktex.surface import (
@@ -189,8 +200,7 @@ def compile_file(
     from_stage: InputStage | str = InputStage.MTX,
     no_host: bool = False,
 ) -> CompileResult:
-    if target != "lualatex":
-        raise MarkTeXError(f"unsupported target: {target}; 0.1 only supports lualatex")
+    target = normalize_target(target)
 
     stage = normalize_input_stage(from_stage)
     requested_emits = set(emits or {ArtifactKind.TARGET})
@@ -227,7 +237,7 @@ def build_document(
     surface = parse_surface(source, filename=filename)
     surface_payload = surface_payload_from_document(surface, source=source, filename=filename)
     host_script = emit_host_script(artifact_envelope(ArtifactKind.SURFACE, surface_payload), no_host=no_host)
-    document = execute_host_script(host_script, filename=filename + ".host.py")
+    document = canonicalize_document(execute_host_script(host_script, filename=filename + ".host.py"))
     state = state_from_document(document, registry=registry)
     backend_ir = make_backend_ir(document)
     target_text = emit_lualatex_from_backend_ir(backend_ir)
@@ -243,6 +253,7 @@ def compile_text_from_stage(
     target: Literal["lualatex"],
     no_host: bool,
 ) -> dict[ArtifactKind, str]:
+    target = normalize_target(target)
     registry = builtin_registry()
     surface_payload: dict[str, object] | None = None
     host_script: str | None = None
@@ -303,6 +314,7 @@ def compile_text_from_stage(
         nonlocal document
         if document is None:
             document = execute_host_script(ensure_host_script(), filename=filename + ".host.py")
+        document = canonicalize_document(document)
         return document
 
     def ensure_state() -> StateEngine:
@@ -382,18 +394,31 @@ def document_from_surface_payload(
     root_link_refs = collect_root_link_references(surface.nodes)
     builder = _SurfaceCoreBuilder(filename, source, registry, host)
     conditional_stack: list[_ConditionalFrame] = []
+    page_layout = PageLayout()
+    content_started = False
+    page_transitions = _PageTransitionQueue()
 
-    def append_event(event: DocumentPatch | ScopePush | ScopeClose) -> None:
+    def append_event(event: DocumentPatch | ScopePush | ScopeClose, *, update_state: bool = True) -> None:
         if isinstance(event, DocumentPatch):
             validate_document_call(registry, event.call)
         events.append(event)
-        state.invoke(event, event.origin)
+        if update_state:
+            state.invoke(event, event.origin)
 
     def append_runtime_events() -> None:
+        nonlocal page_layout
         for event in host.drain_runtime_events():
+            if isinstance(event, DocumentPatch):
+                validate_document_call(registry, event.call)
+                result = plan_document_directive_call(event.call, page_layout)
+                if result.call is None:
+                    raise MarkTeXError(f"{event.call.head} is not a document event", event.origin)
+                page_layout = result.layout
+                event = DocumentPatch(result.call, event.origin)
             append_event(event)
 
     def append_block(block: Block) -> None:
+        nonlocal content_started
         if conditional_stack:
             frame = conditional_stack[-1]
             if frame.else_body is not None:
@@ -401,15 +426,39 @@ def document_from_surface_payload(
             else:
                 frame.current_body.append(block)
         else:
+            page_transitions.flush_before(blocks)
             blocks.append(block)
+            content_started = True
+
+    def append_page_break(origin: SourceSpan) -> None:
+        nonlocal content_started
+        page_transitions.append_page_break(blocks, origin)
+        content_started = True
+
+    def append_pending_surface_node(node: object) -> None:
+        frame = conditional_stack[-1]
+        if frame.else_body is not None:
+            frame.else_body.append(node)
+        else:
+            frame.current_body.append(node)
 
     for node in surface.nodes:
+        if conditional_stack and not isinstance(node, ConditionalNode):
+            append_pending_surface_node(node)
+            continue
         if isinstance(node, DocumentDirectiveNode):
             calls = parse_mos(node.payload, context="document", filename=filename)
             for call in registry.resolve_calls(calls):
-                validate_document_call(registry, call)
-                obj = DocumentPatch(call, call.origin or node.origin)
-                append_event(obj)
+                validate_document_directive_call(registry, call)
+                result = plan_document_directive_call(call, page_layout)
+                page_layout = result.layout
+                if result.call is not None and should_append_document_event(result, content_started):
+                    obj = DocumentPatch(result.call, result.call.origin or node.origin)
+                    append_event(obj)
+                if result.body_effect == "page_setup" and content_started:
+                    page_transitions.queue_page_setup(page_layout, node.origin)
+                elif result.body_effect == "page_break":
+                    append_page_break(node.origin)
         elif isinstance(node, ScopeOpenNode):
             calls = parse_mos(node.payload, context="scope", filename=filename)
             for call in calls:
@@ -442,7 +491,7 @@ def document_from_surface_payload(
                 )
             )
         elif isinstance(node, ConditionalNode):
-            handle_conditional_node(node, host, conditional_stack, blocks, builder, root_link_refs)
+            handle_conditional_node(node, host, conditional_stack, blocks, builder, root_link_refs, page_layout)
         else:
             if conditional_stack:
                 frame = conditional_stack[-1]
@@ -458,17 +507,25 @@ def document_from_surface_payload(
         raise MarkTeXError("unclosed conditional block", conditional_stack[-1].origin)
 
     document = Document(tuple(events), tuple(blocks), tuple(footnotes))
-    return document
+    return canonicalize_document(document)
 
 
 def normalize_input_stage(stage: InputStage | str) -> InputStage:
     if isinstance(stage, InputStage):
         return stage
+    stage = stage.strip()
     try:
         return InputStage(stage)
     except ValueError as exc:
         allowed = ", ".join(item.value for item in InputStage)
         raise MarkTeXError(f"unsupported input stage: {stage}; expected one of {allowed}") from exc
+
+
+def normalize_target(target: str) -> Literal["lualatex"]:
+    normalized = target.strip()
+    if normalized == "lualatex":
+        return "lualatex"
+    raise MarkTeXError(f"unsupported target: {target}; 0.1 only supports lualatex")
 
 
 def resolve_requested_emits(
@@ -576,6 +633,29 @@ def state_from_document(
     return state
 
 
+class _PageTransitionQueue:
+    def __init__(self) -> None:
+        self._page_setup: PageSetup | None = None
+
+    def queue_page_setup(self, layout: PageLayout, origin: SourceSpan) -> None:
+        self._page_setup = page_setup_from_layout(layout, origin)
+
+    def append_page_break(self, blocks: list[Block], origin: SourceSpan) -> None:
+        if self._page_setup is not None:
+            blocks.append(self._page_setup)
+            self._page_setup = None
+            return
+        if blocks and isinstance(blocks[-1], PageBreak | PageSetup):
+            return
+        blocks.append(PageBreak(origin))
+
+    def flush_before(self, blocks: list[Block]) -> None:
+        if self._page_setup is None:
+            return
+        blocks.append(self._page_setup)
+        self._page_setup = None
+
+
 class _SurfaceCoreBuilder:
     def __init__(
         self,
@@ -589,14 +669,42 @@ class _SurfaceCoreBuilder:
         self.registry = registry
         self.host = host
 
-    def blocks(self, nodes: tuple[object, ...], inherited_refs: dict[str, str]) -> tuple[Block, ...]:
+    def blocks(
+        self,
+        nodes: tuple[object, ...],
+        inherited_refs: dict[str, str],
+        *,
+        initial_layout: PageLayout | None = None,
+    ) -> tuple[Block, ...]:
         refs = {**inherited_refs, **direct_link_references(nodes)}
         converted: list[Block] = []
+        page_layout = initial_layout or PageLayout()
+        page_transitions = _PageTransitionQueue()
+
+        def append(block: Block) -> None:
+            page_transitions.flush_before(converted)
+            converted.append(block)
+
         for node in nodes:
             if isinstance(node, CORE_BLOCK_TYPES):
-                converted.append(node)
+                append(node)
+            elif isinstance(node, DocumentDirectiveNode):
+                calls = parse_mos(node.payload, context="document", filename=self.filename)
+                for call in self.registry.resolve_calls(calls):
+                    validate_document_directive_call(self.registry, call)
+                    result = plan_document_directive_call(call, page_layout)
+                    page_layout = result.layout
+                    if result.call is not None and result.event_policy == "always":
+                        raise MarkTeXError(
+                            f"document directive {call.head!r} is not supported inside conditional body",
+                            call.origin or node.origin,
+                        )
+                    if result.body_effect == "page_setup":
+                        page_transitions.queue_page_setup(page_layout, node.origin)
+                    elif result.body_effect == "page_break":
+                        page_transitions.append_page_break(converted, node.origin)
             elif isinstance(node, HeadingNode):
-                converted.append(
+                append(
                     Heading(
                         node.level,
                         self.inlines(node.text, node.text_offsets, refs),
@@ -604,7 +712,7 @@ class _SurfaceCoreBuilder:
                     )
                 )
             elif isinstance(node, ParagraphNode):
-                converted.append(
+                append(
                     Paragraph(
                         self.inlines(node.text, node.text_offsets, refs),
                         node.origin,
@@ -621,11 +729,11 @@ class _SurfaceCoreBuilder:
                 else:
                     body = node.body
                     parts = ()
-                converted.append(CodeBlock(node.language, body, node.interpolated, node.origin, parts))
+                append(CodeBlock(node.language, body, node.interpolated, node.origin, parts))
             elif isinstance(node, RichTableNode):
-                converted.append(self.table(node, refs))
+                append(self.table(node, refs))
             elif isinstance(node, ListBlockNode):
-                converted.append(
+                append(
                     ListBlock(
                         node.ordered,
                         node.start,
@@ -635,9 +743,9 @@ class _SurfaceCoreBuilder:
                     )
                 )
             elif isinstance(node, BlockQuoteNode):
-                converted.append(BlockQuote(self.blocks(node.children, refs), node.origin))
+                append(BlockQuote(self.blocks(node.children, refs), node.origin))
             elif isinstance(node, ThematicBreakNode):
-                converted.append(ThematicBreak(node.origin))
+                append(ThematicBreak(node.origin))
             elif isinstance(node, LinkReferenceDefinitionNode):
                 continue
             elif isinstance(node, ConditionalNode):
@@ -697,18 +805,39 @@ CORE_BLOCK_TYPES = (
     ListBlock,
     BlockQuote,
     ThematicBreak,
+    PageBreak,
+    PageSetup,
     Conditional,
 )
 
 
 def scope_push_from_call(call: CallUnit, fallback_origin: SourceSpan) -> ScopePush:
-    return ScopePush(call.head, args=call.args, kwargs=call.kwargs, origin=call.origin or fallback_origin)
+    kwargs = dict(call.kwargs)
+    target = scope_target_from_kwargs(kwargs, call.origin or fallback_origin)
+    if target == DEFAULT_SCOPE_TARGET:
+        kwargs.pop("scope", None)
+    return ScopePush(call.head, args=call.args, kwargs=kwargs, origin=call.origin or fallback_origin)
 
 
 def validate_document_call(registry: SchemaRegistry, call: CallUnit) -> None:
+    validate_document_directive_call(registry, call)
+    spec = registry.call("document", call.head)
+    if spec is not None and not spec.invokable:
+        raise MarkTeXError(f"{call.head!r} is not a document event", call.origin)
+
+
+def validate_document_directive_call(registry: SchemaRegistry, call: CallUnit) -> None:
     result = registry.validate_call("document", call)
     if not result.ok:
         raise MarkTeXError(result.message, call.origin)
+
+
+def should_append_document_event(result: DocumentDirectiveResult, content_started: bool) -> bool:
+    if result.event_policy == "always":
+        return True
+    if result.event_policy == "before_content":
+        return not content_started
+    return False
 
 
 def collect_root_link_references(nodes: tuple[SurfaceNode, ...]) -> dict[str, str]:
@@ -741,6 +870,7 @@ def handle_conditional_node(
     root_blocks: list[Block],
     builder: _SurfaceCoreBuilder,
     root_link_refs: dict[str, str],
+    page_layout: PageLayout,
 ) -> None:
     if node.marker == "!?":
         frame = _ConditionalFrame(node.origin)
@@ -769,7 +899,7 @@ def handle_conditional_node(
     if node.marker == "!!?":
         frame.push_branch()
         stack.pop()
-        conditional = conditional_from_surface_frame(frame, builder, root_link_refs)
+        conditional = conditional_from_surface_frame(frame, builder, root_link_refs, page_layout)
         if stack:
             parent = stack[-1]
             if parent.else_body is not None:
@@ -786,17 +916,18 @@ def conditional_from_surface_frame(
     frame: _ConditionalFrame,
     builder: _SurfaceCoreBuilder,
     inherited_refs: dict[str, str],
+    initial_layout: PageLayout,
 ) -> Conditional:
     return Conditional(
         tuple(
             ConditionalBranch(
                 branch.condition,
-                builder.blocks(branch.body, inherited_refs),
+                builder.blocks(branch.body, inherited_refs, initial_layout=initial_layout),
                 branch.origin,
             )
             for branch in frame.branches
         ),
-        builder.blocks(tuple(frame.else_body or ()), inherited_refs),
+        builder.blocks(tuple(frame.else_body or ()), inherited_refs, initial_layout=initial_layout),
         frame.origin,
     )
 
@@ -851,25 +982,20 @@ def column_call(
 ) -> CallUnit:
     origin = span_from_offsets(filename, offsets, source)
     if kind == "pipe-align":
-        return CallUnit(
+        return canonicalize_table_column(CallUnit(
             "table-column",
             "column",
             kwargs={"align": RawString(spec, origin)},
             origin=origin,
-        )
+        ))
 
     calls = parse_mos(spec, context="table-column", filename=filename)
     calls = [remap_call_origin(call, offsets, filename, source) for call in calls]
     if not calls:
-        return CallUnit("table-column", "column", origin=origin)
+        return canonicalize_table_column(CallUnit("table-column", "column", origin=origin))
     if len(calls) == 1:
-        return registry.resolve_call(calls[0])
-    return CallUnit(
-        "table-column",
-        "column",
-        args=tuple(registry.resolve_call(call) for call in calls),
-        origin=origin,
-    )
+        return canonicalize_table_column(registry.resolve_call(calls[0]))
+    raise MarkTeXError("table column accepts one column spec", origin)
 
 
 def remap_call_origin(

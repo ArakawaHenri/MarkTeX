@@ -22,6 +22,8 @@ from marktex.core import (
     Link,
     ListBlock,
     ListItem,
+    PageBreak,
+    PageSetup,
     Paragraph,
     ScopeClose,
     ScopePush,
@@ -33,6 +35,8 @@ from marktex.core import (
 )
 from marktex.mos import CallUnit, RawString, TupleValue
 from marktex.mos.model import MosValue
+from marktex.scope import DEFAULT_SCOPE_TARGET, validate_scope_target
+from marktex.semantics import MARGIN_KEYS, normalize_dimension
 from marktex.source import MarkTeXError
 
 RuntimeEvent = DocumentPatch | ScopePush | ScopeClose
@@ -75,12 +79,13 @@ class RuntimeSession:
         self,
         key: str,
         *args: object,
-        scope: str = "DEFAULT",
+        scope: str = DEFAULT_SCOPE_TARGET,
         **kwargs: object,
     ) -> ScopePush:
         payload = {name: value_to_mos(value) for name, value in kwargs.items()}
-        if scope != "DEFAULT":
-            payload["scope"] = RawString(scope)
+        target = validate_scope_target(scope)
+        if target != DEFAULT_SCOPE_TARGET:
+            payload["scope"] = RawString(target)
         return ScopePush(key, args=tuple(value_to_mos(arg) for arg in args), kwargs=payload)
 
     def scope_close(self, key: str = "") -> ScopeClose:
@@ -158,7 +163,12 @@ def document_patch(head: str, *args: object, **kwargs: object) -> DocumentPatch:
     return _DEFAULT_SESSION.document_patch(head, *args, **kwargs)
 
 
-def scope_push(key: str, *args: object, scope: str = "DEFAULT", **kwargs: object) -> ScopePush:
+def scope_push(
+    key: str,
+    *args: object,
+    scope: str = DEFAULT_SCOPE_TARGET,
+    **kwargs: object,
+) -> ScopePush:
     return _DEFAULT_SESSION.scope_push(key, *args, scope=scope, **kwargs)
 
 
@@ -196,6 +206,8 @@ def paragraph(*children: object) -> Paragraph:
 
 
 def heading(level: int, *children: object) -> Heading:
+    if level < 1 or level > 6:
+        raise MarkTeXError(f"heading level out of range: {level}")
     return Heading(level, tuple(inline_node(child) for child in children))
 
 
@@ -246,6 +258,8 @@ def inline_code(value: str) -> InlineCode:
 
 
 def line_break(*, hard: bool = True) -> LineBreak:
+    if not isinstance(hard, bool):
+        raise MarkTeXError("line break hard must be a boolean")
     return LineBreak(hard)
 
 
@@ -267,6 +281,8 @@ def list_block(
     start: int = 1,
     tight: bool = True,
 ) -> ListBlock:
+    if start < 1:
+        raise MarkTeXError("ordered list start must be >= 1")
     return ListBlock(ordered, start, tight, tuple(items))
 
 
@@ -276,6 +292,27 @@ def blockquote(*children: Block) -> BlockQuote:
 
 def thematic_break() -> ThematicBreak:
     return ThematicBreak()
+
+
+def page_break() -> PageBreak:
+    return PageBreak()
+
+
+def page_setup(
+    width: str,
+    height: str,
+    **margins: str,
+) -> PageSetup:
+    normalized_margins: dict[str, str] = {}
+    for key, value in margins.items():
+        if key not in MARGIN_KEYS:
+            raise MarkTeXError(f"unknown margin key: {key}")
+        normalized_margins[key] = normalize_dimension(str(value), key)
+    return PageSetup(
+        normalize_dimension(str(width), "width"),
+        normalize_dimension(str(height), "height"),
+        normalized_margins,
+    )
 
 
 def inline_expr(source: str, value: object) -> InlineExpression:

@@ -100,6 +100,9 @@ class _Parser:
             if self.peek == ",":
                 self.index += 1
                 continue
+            if self._skip_spaces_before_tuple():
+                args.append(self.parse_tuple())
+                continue
 
             segment = self.read_segment()
             if self.peek == "=":
@@ -116,6 +119,8 @@ class _Parser:
                 args.append(self.parse_frame(nested_head, segment.start))
             elif segment.text or segment.force_raw:
                 args.append(self.raw_from_segment(segment))
+            elif not self.eof:
+                self.error(f"unexpected {self.peek!r} in MOS call")
 
             if self.peek == ",":
                 self.index += 1
@@ -129,7 +134,7 @@ class _Parser:
         return CallUnit(self.context, head, tuple(args), kwargs, self.span(start, self.index))
 
     def parse_value(self) -> MosValue:
-        if self.peek == "(":
+        if self.peek == "(" or self._skip_spaces_before_tuple():
             return self.parse_tuple()
 
         segment = self.read_segment()
@@ -140,6 +145,15 @@ class _Parser:
                 self.error("empty nested call head in MOS value", segment.start)
             return self.parse_frame(head, segment.start)
         return self.raw_from_segment(segment)
+
+    def _skip_spaces_before_tuple(self) -> bool:
+        start = self.index
+        while not self.eof and self.peek in {" ", "\t"}:
+            self.index += 1
+        if not self.eof and self.peek == "(":
+            return True
+        self.index = start
+        return False
 
     def parse_tuple(self) -> TupleValue:
         start = self.index
@@ -153,6 +167,8 @@ class _Parser:
                 self.index += 1
                 continue
             items.append(self.parse_value())
+            if not self.eof and self.peek not in {",", ")"}:
+                self.error("expected ',' or ')' in MOS tuple")
             if self.peek == ",":
                 self.index += 1
         self.error("unclosed tuple in MOS payload", start)

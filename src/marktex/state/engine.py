@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from marktex.core import DocumentPatch, MarkTeXObject, ScopeClose, ScopePush, object_to_json
+from marktex.scope import scope_target_from_kwargs
 from marktex.source import MarkTeXError, SourceSpan
 
 
@@ -23,6 +24,7 @@ class InvokeEvent:
 @dataclass
 class _ScopeFrame:
     key: str
+    target: str
     open_order: int
     close_order: int | None = None
 
@@ -35,7 +37,7 @@ class StateEngine:
     def invoke(self, obj: MarkTeXObject, origin: SourceSpan | None = None) -> None:
         order = len(self.events)
         if isinstance(obj, ScopePush):
-            self._frames.append(_ScopeFrame(obj.key, order))
+            self._frames.append(_ScopeFrame(obj.key, scope_target_from_kwargs(obj.kwargs, obj.origin), order))
         elif isinstance(obj, ScopeClose):
             self._close_scope(obj.key, obj.origin)
         elif not isinstance(obj, DocumentPatch):
@@ -57,6 +59,7 @@ class StateEngine:
             "scopes": [
                 {
                     "key": frame.key,
+                    "target": frame.target,
                     "open_order": frame.open_order,
                     "close_order": frame.close_order,
                 }

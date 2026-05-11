@@ -24,6 +24,8 @@ from marktex.core import (
     Link,
     ListBlock,
     ListItem,
+    PageBreak,
+    PageSetup,
     Paragraph,
     ScopeClose,
     ScopePush,
@@ -68,10 +70,10 @@ def span_from_json(payload: object) -> SourceSpan | None:
         raise MarkTeXError("invalid source span in artifact")
     return SourceSpan(
         str(payload.get("filename", "")),
-        int(payload.get("start", 0)),
-        int(payload.get("end", 0)),
-        int(payload.get("line", 1)),
-        int(payload.get("column", 1)),
+        int_value(payload.get("start"), default=0),
+        int_value(payload.get("end"), default=0),
+        int_value(payload.get("line"), default=1),
+        int_value(payload.get("column"), default=1),
     )
 
 
@@ -83,7 +85,7 @@ def mos_value_from_json(payload: object) -> RawString | TupleValue | CallUnit:
         return RawString(
             str(payload.get("text", "")),
             span_from_json(payload.get("origin")),
-            bool(payload.get("force_raw", False)),
+            bool_value(payload.get("force_raw", False), "raw force_raw"),
         )
     if kind == "tuple":
         return TupleValue(
@@ -179,7 +181,7 @@ def block_from_json(payload: object) -> Block:
         )
     if kind == "heading":
         return Heading(
-            int(payload.get("level", 1)),
+            int_value(payload.get("level"), default=1),
             tuple(inline_from_json(item) for item in as_list(payload.get("children"))),
             span_from_json(payload.get("origin")),
         )
@@ -187,7 +189,7 @@ def block_from_json(payload: object) -> Block:
         return CodeBlock(
             str(payload.get("language", "")),
             str(payload.get("body", "")),
-            bool(payload.get("interpolated", False)),
+            bool_value(payload.get("interpolated", False), "code block interpolated"),
             span_from_json(payload.get("origin")),
             tuple(code_part_from_json(item) for item in as_list(payload.get("parts"))),
         )
@@ -209,9 +211,9 @@ def block_from_json(payload: object) -> Block:
         )
     if kind == "list":
         return ListBlock(
-            bool(payload.get("ordered", False)),
-            int(payload.get("start", 1)),
-            bool(payload.get("tight", True)),
+            bool_value(payload.get("ordered", False), "list ordered"),
+            int_value(payload.get("start"), default=1),
+            bool_value(payload.get("tight", True), "list tight"),
             tuple(list_item_from_json(item) for item in as_list(payload.get("items"))),
             span_from_json(payload.get("origin")),
         )
@@ -222,6 +224,18 @@ def block_from_json(payload: object) -> Block:
         )
     if kind == "thematic_break":
         return ThematicBreak(span_from_json(payload.get("origin")))
+    if kind == "page_break":
+        return PageBreak(span_from_json(payload.get("origin")))
+    if kind == "page_setup":
+        return PageSetup(
+            str_value(payload.get("width"), "page setup width"),
+            str_value(payload.get("height"), "page setup height"),
+            {
+                str(key): str_value(value, "page setup margin")
+                for key, value in as_dict(payload.get("margins")).items()
+            },
+            span_from_json(payload.get("origin")),
+        )
     if kind == "conditional":
         return Conditional(
             tuple(conditional_branch_from_json(item) for item in as_list(payload.get("branches"))),
@@ -236,7 +250,7 @@ def list_item_from_json(payload: object) -> ListItem:
         raise MarkTeXError("invalid list item in artifact")
     return ListItem(
         tuple(block_from_json(item) for item in as_list(payload.get("children"))),
-        payload.get("checked") if payload.get("checked") is None else bool(payload.get("checked")),
+        optional_bool_value(payload.get("checked"), "list item checked"),
         span_from_json(payload.get("origin")),
     )
 
@@ -296,7 +310,7 @@ def inline_from_json(payload: object) -> InlineNode:
     if kind == "inline_code":
         return InlineCode(str(payload.get("value", "")), span_from_json(payload.get("origin")))
     if kind == "line_break":
-        return LineBreak(bool(payload.get("hard", False)), span_from_json(payload.get("origin")))
+        return LineBreak(bool_value(payload.get("hard", False), "line break hard"), span_from_json(payload.get("origin")))
     if kind == "link":
         return Link(
             tuple(inline_from_json(item) for item in as_list(payload.get("children"))),
@@ -509,7 +523,7 @@ def surface_node_from_json(payload: object) -> SurfaceNode:
         return CodeFenceNode(
             str(payload.get("language", "")),
             str(payload.get("body", "")),
-            bool(payload.get("interpolated", False)),
+            bool_value(payload.get("interpolated", False), "code fence interpolated"),
             origin,
         )
     if kind == "rich_table":
@@ -532,9 +546,9 @@ def surface_node_from_json(payload: object) -> SurfaceNode:
         )
     if kind == "list":
         return ListBlockNode(
-            bool(payload.get("ordered", False)),
-            int(payload.get("start", 1)),
-            bool(payload.get("tight", True)),
+            bool_value(payload.get("ordered", False), "surface list ordered"),
+            int_value(payload.get("start"), default=1),
+            bool_value(payload.get("tight", True), "surface list tight"),
             tuple(surface_list_item_from_json(item) for item in as_list(payload.get("items"))),
             origin,
         )
@@ -559,7 +573,7 @@ def surface_list_item_from_json(payload: object) -> ListItemNode:
         raise MarkTeXError("invalid surface list item in artifact")
     return ListItemNode(
         tuple(surface_node_from_json(item) for item in as_list(payload.get("children"))),
-        payload.get("checked") if payload.get("checked") is None else bool(payload.get("checked")),
+        optional_bool_value(payload.get("checked"), "surface list item checked"),
         required_span(payload.get("origin")),
     )
 
@@ -590,11 +604,27 @@ def as_dict(payload: object) -> dict[object, object]:
 def int_value(payload: object, *, default: int = 0) -> int:
     if payload is None:
         return default
-    if isinstance(payload, int):
+    if isinstance(payload, int) and not isinstance(payload, bool):
         return payload
+    raise MarkTeXError("artifact integer field is not an integer")
+
+
+def bool_value(payload: object, label: str) -> bool:
+    if isinstance(payload, bool):
+        return payload
+    raise MarkTeXError(f"{label} must be a boolean")
+
+
+def optional_bool_value(payload: object, label: str) -> bool | None:
+    if payload is None:
+        return None
+    return bool_value(payload, label)
+
+
+def str_value(payload: object, label: str) -> str:
     if isinstance(payload, str):
-        return int(payload)
-    return int(str(payload))
+        return payload
+    raise MarkTeXError(f"{label} must be a string")
 
 
 EVENT_KINDS = {"document_patch", "scope_push", "scope_close"}
@@ -619,6 +649,8 @@ BLOCK_KINDS = {
     "list",
     "blockquote",
     "thematic_break",
+    "page_break",
+    "page_setup",
     "conditional",
 }
 CORE_KINDS = EVENT_KINDS | INLINE_KINDS | BLOCK_KINDS | {

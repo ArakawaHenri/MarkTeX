@@ -61,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target",
         default="lualatex",
+        type=str.strip,
         help="output target; 0.1 only accepts lualatex",
     )
     parser.add_argument(
@@ -68,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="from_stage",
         choices=[stage.value for stage in InputStage],
         default=InputStage.MTX.value,
+        type=str.strip,
         help="input stage: mtx, surface, host, ast, eir, or backend-ir",
     )
     parser.add_argument(
@@ -79,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--diagnostic-format",
         choices=("text", "json"),
         default="text",
+        type=str.strip,
         help="diagnostic output format",
     )
     parser.add_argument("--version", action="version", version=f"mtxc {__version__}")
@@ -89,7 +92,8 @@ def parse_emits(raw_emits: list[str]) -> set[ArtifactKind]:
     if not raw_emits:
         return {ArtifactKind.TARGET}
     emits: set[ArtifactKind] = set()
-    for raw in raw_emits:
+    for item in raw_emits:
+        raw = item.strip()
         if raw == "all":
             emits.update(ALL_ARTIFACTS)
             continue

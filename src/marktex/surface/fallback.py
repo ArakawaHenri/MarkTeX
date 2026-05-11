@@ -395,6 +395,9 @@ def parse_link_reference(line: FallbackLine, filename: str, source: str) -> Link
     if match is None:
         return None
     target = match.group(2)
+    trailing = match.group(3) or ""
+    if trailing.strip():
+        raise MarkTeXError("unsupported link title", span_from_lines(filename, [line], source))
     if target.startswith("<") and target.endswith(">"):
         target = target[1:-1]
     return LinkReferenceDefinitionNode(
@@ -437,7 +440,7 @@ def fenced_code_open(line: FallbackLine) -> re.Match[str] | None:
 
 
 def link_reference_match(line: FallbackLine) -> re.Match[str] | None:
-    return re.match(r"^ {0,3}\[([^\]]+)\]:[ \t]*(\S+)(?:[ \t]+.*)?$", line.text)
+    return re.match(r"^ {0,3}\[([^\]]+)\]:[ \t]*(\S+)([ \t]+.*)?$", line.text)
 
 
 def is_thematic_break(line: FallbackLine) -> bool:
