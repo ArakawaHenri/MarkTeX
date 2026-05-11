@@ -53,16 +53,16 @@ not a global function.
 | --- | --- |
 | Python package `marktex` | Supported |
 | CLI `mtxc` | Supported |
-| Default target artifact | Supported; `.tex` for `lualatex` |
+| Default target artifact | Supported: `.tex` for `lualatex` |
 | Target `lualatex` | Only accepted target |
 | PDF generation | Out of scope |
-| `--from mtx|surface|host|ast|eir|backend-ir` | Supported; default `mtx`, no extension inference |
-| `--emit surface|host|ast|eir|backend-ir|target|all` | Supported |
-| `--diagnostic-format text|json` | Supported |
+| `--from mtx\|surface\|host\|ast\|eir\|backend-ir` | Supported: default `mtx`, no extension inference |
+| `--emit surface\|host\|ast\|eir\|backend-ir\|target\|all` | Supported |
+| `--diagnostic-format text\|json` | Supported |
 | `--no-host` | Supported restricted mode |
 | MOS raw strings, frames, tuples, escapes, raw literals | Supported |
 | Schema-driven value shading | Supported |
-| `!#` document/page directives | Supported; backend lowers layout, margins, and body page setup |
+| `!#` document/page directives | Supported: backend lowers layout, margins, and body page setup |
 | `!@` and `!!@` scope events | Supported in state/EIR |
 | Python `$$$` host blocks | Supported for trusted input |
 | Inline `[$ ... ]` expressions | Supported |
@@ -77,7 +77,7 @@ not a global function.
 | Explicit citation references | Supported through citation styles |
 | Bibliography backend | Supported BibTeX subset with `.mtxcs`/`.mtxbs` styles |
 | Conditionals | Concrete bool and `PAGE.CURRENT == PAGE.TOTAL` supported |
-| Direct Markdown dialect compatibility | Out of scope; autolink and raw HTML semantics are not supported |
+| Direct Markdown dialect compatibility | Out of scope: autolink and raw HTML semantics are not supported |
 
 ## 3. Package And CLI
 

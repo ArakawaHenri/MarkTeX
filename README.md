@@ -50,6 +50,22 @@ uv run mtxc paper.mtx
 This repository uses `uv` as its only Python package manager. Use `uv run`,
 `uv sync`, and `uv build` for project workflows.
 
+## LuaLaTeX Dependencies
+
+`mtxc` emits `.tex` files but does not run LuaLaTeX or build PDFs. To compile
+the current LuaLaTeX backend output with TeX Live, MacTeX, or BasicTeX, install
+the required macro packages with one command:
+
+```bash
+tlmgr install fontspec luatexja hyperref tools lastpage graphics refcount geometry ulem
+```
+
+The emitted preamble uses `fontspec`, `luatexja`, `hyperref`, `array` from the
+TeX Live `tools` bundle, `lastpage`, `graphicx` from the `graphics` bundle,
+`refcount`, and `geometry`. `ulem` is only loaded when the document uses
+strikethrough. `PAGE.TOTAL` uses LaTeX cross references, so run `lualatex` twice
+when compiling PDFs.
+
 Because `.mtx` files may contain Python host blocks, treat them as scripts.
 Use `--no-host` for untrusted input. See the canonical documentation for the
 exact supported syntax and release checklist.
