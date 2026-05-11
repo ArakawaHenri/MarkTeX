@@ -6,6 +6,9 @@ from typing import Callable
 
 from marktex.bibliography import (
     BibEntry,
+    BibliographyResources,
+    BibliographyStyle,
+    CitationStyle,
     load_bib_resources,
     load_bibliography_style,
     load_citation_style,
@@ -19,15 +22,27 @@ Escaper = Callable[[str], str]
 
 
 class LuaLaTeXBibliography:
-    def __init__(self, document: Document, escape_text: Escaper, escape_url: Escaper) -> None:
-        base_dir = document_base_dir(document)
-        resource_paths, citation_style_name, bibliography_style_name = document_bibliography_config(
-            document,
-            base_dir,
-        )
-        self.resources = load_bib_resources(tuple(resource_paths))
-        self.citation_style = load_citation_style(citation_style_name, base_dir)
-        self.bibliography_style = load_bibliography_style(bibliography_style_name, base_dir)
+    def __init__(
+        self,
+        document: Document,
+        escape_text: Escaper,
+        escape_url: Escaper,
+        *,
+        snapshot: dict[str, object] | None = None,
+    ) -> None:
+        if snapshot is None:
+            base_dir = document_base_dir(document)
+            resource_paths, citation_style_name, bibliography_style_name = document_bibliography_config(
+                document,
+                base_dir,
+            )
+            self.resources = load_bib_resources(tuple(resource_paths))
+            self.citation_style = load_citation_style(citation_style_name, base_dir)
+            self.bibliography_style = load_bibliography_style(bibliography_style_name, base_dir)
+        else:
+            self.resources = resources_from_json(snapshot.get("resources"))
+            self.citation_style = citation_style_from_json(snapshot.get("citation_style"))
+            self.bibliography_style = bibliography_style_from_json(snapshot.get("bibliography_style"))
         self.escape_text = escape_text
         self.escape_url = escape_url
         self.cited_keys: list[str] = []
@@ -299,3 +314,122 @@ def bibliography_summary(document: Document) -> dict[str, object]:
         "citation_style": citation_style or "numeric",
         "bibliography_style": bibliography_style or "numeric",
     }
+
+
+def bibliography_snapshot(document: Document) -> dict[str, object]:
+    base_dir = document_base_dir(document)
+    resource_paths, citation_style_name, bibliography_style_name = document_bibliography_config(
+        document,
+        base_dir,
+    )
+    resources = load_bib_resources(tuple(resource_paths))
+    citation_style = load_citation_style(citation_style_name, base_dir)
+    bibliography_style = load_bibliography_style(bibliography_style_name, base_dir)
+    return {
+        "config": {
+            "resources": [str(path) for path in resource_paths],
+            "citation_style": citation_style_name or "numeric",
+            "bibliography_style": bibliography_style_name or "numeric",
+        },
+        "resources": resources_to_json(resources),
+        "citation_style": citation_style_to_json(citation_style),
+        "bibliography_style": bibliography_style_to_json(bibliography_style),
+    }
+
+
+def resources_to_json(resources: BibliographyResources) -> dict[str, object]:
+    return {
+        "ordered_keys": list(resources.ordered_keys),
+        "entries": [
+            entry_to_json(resources.entries[key])
+            for key in resources.ordered_keys
+            if key in resources.entries
+        ],
+    }
+
+
+def entry_to_json(entry: BibEntry) -> dict[str, object]:
+    return {
+        "key": entry.key,
+        "entry_type": entry.entry_type,
+        "fields": dict(entry.fields),
+        "source_path": str(entry.source_path),
+        "order": entry.order,
+    }
+
+
+def citation_style_to_json(style: CitationStyle) -> dict[str, object]:
+    return {
+        "name": style.name,
+        "mode": style.mode,
+        "form": style.form,
+        "delimiter": style.delimiter,
+        "year_separator": style.year_separator,
+        "locator_prefix": style.locator_prefix,
+    }
+
+
+def bibliography_style_to_json(style: BibliographyStyle) -> dict[str, object]:
+    return {
+        "name": style.name,
+        "title": style.title,
+        "include": style.include,
+        "sort": style.sort,
+        "placement": style.placement,
+        "label": style.label,
+        "templates": {key: list(value) for key, value in style.templates.items()},
+    }
+
+
+def resources_from_json(payload: object) -> BibliographyResources:
+    if not isinstance(payload, dict):
+        raise MarkTeXError("backend-ir bibliography resources are invalid")
+    entries: dict[str, BibEntry] = {}
+    for item in payload.get("entries", []):
+        if not isinstance(item, dict):
+            raise MarkTeXError("backend-ir bibliography entry is invalid")
+        entry = BibEntry(
+            str(item.get("key", "")),
+            str(item.get("entry_type", "")),
+            {str(key): str(value) for key, value in dict(item.get("fields", {})).items()},
+            Path(str(item.get("source_path", ""))),
+            int(item.get("order", 0)),
+        )
+        entries[entry.key] = entry
+    ordered_keys = tuple(str(key) for key in payload.get("ordered_keys", []))
+    return BibliographyResources(entries, ordered_keys)
+
+
+def citation_style_from_json(payload: object) -> CitationStyle:
+    if not isinstance(payload, dict):
+        raise MarkTeXError("backend-ir citation style is invalid")
+    return CitationStyle(
+        str(payload.get("name", "numeric")),
+        str(payload.get("mode", "numeric")),
+        str(payload.get("form", "square")),
+        str(payload.get("delimiter", "; ")),
+        str(payload.get("year_separator", ", ")),
+        str(payload.get("locator_prefix", ", ")),
+    )
+
+
+def bibliography_style_from_json(payload: object) -> BibliographyStyle:
+    if not isinstance(payload, dict):
+        raise MarkTeXError("backend-ir bibliography style is invalid")
+    templates: dict[str, tuple[str, ...]] = {}
+    raw_templates = payload.get("templates", {})
+    if isinstance(raw_templates, dict):
+        templates = {
+            str(key): tuple(str(item) for item in value)
+            for key, value in raw_templates.items()
+            if isinstance(value, list)
+        }
+    return BibliographyStyle(
+        str(payload.get("name", "numeric")),
+        str(payload.get("title", "References")),
+        str(payload.get("include", "cited")),
+        str(payload.get("sort", "citation-order")),
+        str(payload.get("placement", "new-page")),
+        str(payload.get("label", "numeric")),
+        templates,
+    )
