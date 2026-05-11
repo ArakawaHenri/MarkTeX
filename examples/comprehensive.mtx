@@ -22,8 +22,11 @@ This paragraph covers *emphasis*, **strong text**, `inline code`, a
 ![MarkTeX logo](examples/assets/logo.pdf), a footnote reference[^overview], and a citation
 reference [^ cite: Knuth84, pages=12-15 ].
 
-This paragraph uses a source line continuation \
-to remain one paragraph while testing physical-line joining.
+This paragraph spans
+two physical source lines, which tests MarkTeX physical line breaks.
+
+This paragraph uses backslash line continuation\
+to join two source lines without inserting space.
 
 これは日本語と English mixed text です。LuaLaTeX-oriented output keeps CJK text in the document.
 
@@ -72,5 +75,27 @@ Literal pipe | A \| B | escaped
 Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
 +++
 
+## MarkTeX Fallback Blocks
+
+1. Ordered item with [$ PAGE.CURRENT ].
+2. Second ordered item.
+
+- [x] Checked task item with ~~strikethrough~~.
+- [ ] Unchecked task item.
+  - Nested bullet with a [reference link][project].
+
+> Block quote content remains ordinary MarkTeX inline content, including
+> *emphasis* and page placeholder [$ PAGE.CURRENT ].
+
+| Left | Center | Right |
+| :--- | :----: | ----: |
+| pipe table | **strong** | footnote[^pipe-note] |
+| image | ![Logo](examples/assets/logo.pdf) | `code` |
+
+---
+
 [^overview]: Footnotes are single-line definitions in MarkTeX 0.1.
 [^table-note]: Footnotes may be referenced from rich table cells.
+[^pipe-note]: Pipe table cells use the same deferred footnote lowering.
+
+[project]: https://example.com/marktex

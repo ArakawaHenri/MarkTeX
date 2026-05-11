@@ -27,11 +27,11 @@ class MosParserTests(unittest.TestCase):
         self.assertTrue(value.force_raw)
         self.assertEqual(value.text, ",;:=()")
 
-    def test_backslash_newline_becomes_space(self) -> None:
+    def test_backslash_newline_continues_without_space(self) -> None:
         call = parse_mos("a: hello\\\nworld")[0]
         value = call.args[0]
         self.assertIsInstance(value, RawString)
-        self.assertEqual(value.text, " hello world")
+        self.assertEqual(value.text, " helloworld")
 
 
 class SchemaTests(unittest.TestCase):

@@ -186,7 +186,7 @@ class _Parser:
             return "\\"
         if self.peek == "\n":
             self.index += 1
-            return " "
+            return ""
         char = self.peek
         self.index += 1
         return char

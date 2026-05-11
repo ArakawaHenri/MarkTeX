@@ -35,6 +35,7 @@ class HostBlockNode:
 class FootnoteDefinitionNode:
     label: str
     body: str
+    body_offsets: tuple[int, ...]
     origin: SourceSpan
 
 
@@ -57,6 +58,7 @@ class HeadingNode:
 class ParagraphNode:
     text: str
     origin: SourceSpan
+    text_offsets: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -70,8 +72,44 @@ class CodeFenceNode:
 @dataclass(frozen=True)
 class RichTableNode:
     column_specs: tuple[str, ...]
+    column_spec_kinds: tuple[str, ...]
+    column_spec_offsets: tuple[tuple[int, ...], ...]
     rows: tuple[tuple[str, ...], ...]
     cell_offsets: tuple[tuple[tuple[int, ...], ...], ...]
+    origin: SourceSpan
+
+
+@dataclass(frozen=True)
+class ListItemNode:
+    children: tuple["SurfaceNode", ...]
+    checked: bool | None
+    origin: SourceSpan
+
+
+@dataclass(frozen=True)
+class ListBlockNode:
+    ordered: bool
+    start: int
+    tight: bool
+    items: tuple[ListItemNode, ...]
+    origin: SourceSpan
+
+
+@dataclass(frozen=True)
+class BlockQuoteNode:
+    children: tuple["SurfaceNode", ...]
+    origin: SourceSpan
+
+
+@dataclass(frozen=True)
+class ThematicBreakNode:
+    origin: SourceSpan
+
+
+@dataclass(frozen=True)
+class LinkReferenceDefinitionNode:
+    label: str
+    target: str
     origin: SourceSpan
 
 
@@ -86,6 +124,10 @@ SurfaceNode: TypeAlias = (
     | ParagraphNode
     | CodeFenceNode
     | RichTableNode
+    | ListBlockNode
+    | BlockQuoteNode
+    | ThematicBreakNode
+    | LinkReferenceDefinitionNode
 )
 
 

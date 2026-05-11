@@ -3,15 +3,14 @@ from __future__ import annotations
 import re
 
 from marktex.source import MarkTeXError, SourceSpan
+from marktex.surface.fallback import FallbackLine, parse_fallback_lines
 from marktex.surface.grammar import FOOTNOTE_DEFINITION_RE
 from marktex.surface.model import (
     CodeFenceNode,
     ConditionalNode,
     DocumentDirectiveNode,
     FootnoteDefinitionNode,
-    HeadingNode,
     HostBlockNode,
-    ParagraphNode,
     RichTableNode,
     ScopeCloseNode,
     ScopeOpenNode,
@@ -23,20 +22,16 @@ from marktex.surface.model import (
 def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
     lines = source.splitlines(keepends=True)
     nodes: list[SurfaceNode] = []
-    paragraph: list[str] = []
-    paragraph_start = 0
+    fallback: list[FallbackLine] = []
     index = 0
     offset = 0
 
-    def flush_paragraph(end_offset: int) -> None:
-        nonlocal paragraph, paragraph_start
-        if not paragraph:
+    def flush_fallback() -> None:
+        nonlocal fallback
+        if not fallback:
             return
-        text = " ".join(part for part in paragraph if part)
-        if text:
-            nodes.append(ParagraphNode(text, span(filename, paragraph_start, end_offset, source)))
-        paragraph = []
-        paragraph_start = end_offset
+        nodes.extend(parse_fallback_lines(fallback, filename=filename, source=source))
+        fallback = []
 
     while index < len(lines):
         line = lines[index]
@@ -44,24 +39,27 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
         line_start = offset
 
         if stripped_newline.startswith("```"):
-            flush_paragraph(line_start)
+            flush_fallback()
             fence_node, index, offset = parse_code_fence(lines, index, offset, source, filename)
             nodes.append(fence_node)
             continue
 
         if stripped_newline.startswith("$$$"):
-            flush_paragraph(line_start)
+            flush_fallback()
             host_node, index, offset = parse_host_block(lines, index, offset, source, filename)
             nodes.append(host_node)
             continue
 
         footnote = FOOTNOTE_DEFINITION_RE.match(stripped_newline)
         if footnote:
-            flush_paragraph(line_start)
+            flush_fallback()
+            body_start = line_start + footnote.start(2)
+            body = footnote.group(2)
             nodes.append(
                 FootnoteDefinitionNode(
                     footnote.group(1),
-                    footnote.group(2),
+                    body,
+                    tuple(range(body_start, body_start + len(body) + 1)),
                     span(filename, line_start, line_start + len(stripped_newline), source),
                 )
             )
@@ -70,14 +68,14 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
             continue
 
         if stripped_newline.startswith("+++"):
-            flush_paragraph(line_start)
+            flush_fallback()
             table_node, index, offset = parse_rich_table(lines, index, offset, source, filename)
             nodes.append(table_node)
             continue
 
         conditional_marker = conditional_start(stripped_newline)
         if conditional_marker is not None:
-            flush_paragraph(line_start)
+            flush_fallback()
             nodes.append(
                 ConditionalNode(
                     conditional_marker,
@@ -90,7 +88,7 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
             continue
 
         if stripped_newline.startswith("!!@"):
-            flush_paragraph(line_start)
+            flush_fallback()
             nodes.append(
                 ScopeCloseNode(
                     stripped_newline[3:].strip(),
@@ -102,7 +100,7 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
             continue
 
         if stripped_newline.startswith("!#"):
-            flush_paragraph(line_start)
+            flush_fallback()
             nodes.append(
                 DocumentDirectiveNode(
                     stripped_newline[2:].lstrip(),
@@ -114,7 +112,7 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
             continue
 
         if stripped_newline.startswith("!@"):
-            flush_paragraph(line_start)
+            flush_fallback()
             nodes.append(
                 ScopeOpenNode(
                     stripped_newline[2:].lstrip(),
@@ -125,41 +123,11 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
             offset += len(line)
             continue
 
-        heading = re.match(r"^(#{1,6})\s+(.*)$", stripped_newline)
-        if heading:
-            flush_paragraph(line_start)
-            raw_text = heading.group(2)
-            leading_trim = len(raw_text) - len(raw_text.lstrip())
-            text = raw_text.strip()
-            text_start = line_start + heading.start(2) + leading_trim
-            nodes.append(
-                HeadingNode(
-                    len(heading.group(1)),
-                    text,
-                    tuple(range(text_start, text_start + len(text) + 1)),
-                    span(filename, line_start, line_start + len(stripped_newline), source),
-                )
-            )
-            index += 1
-            offset += len(line)
-            continue
-
-        if not stripped_newline.strip():
-            flush_paragraph(line_start)
-            index += 1
-            offset += len(line)
-            continue
-
-        if not paragraph:
-            paragraph_start = line_start
-        if stripped_newline.endswith("\\"):
-            paragraph.append(stripped_newline[:-1] + " ")
-        else:
-            paragraph.append(stripped_newline.strip())
+        fallback.append(FallbackLine.from_source_line(line, line_start))
         index += 1
         offset += len(line)
 
-    flush_paragraph(offset)
+    flush_fallback()
     return SurfaceDocument(tuple(nodes))
 
 
@@ -250,7 +218,10 @@ def parse_rich_table(
     if not marker:
         raise MarkTeXError("malformed rich table", span(filename, offset, offset + len(opener), source))
     fence = marker.group(1)
-    column_specs = tuple(spec.strip() for spec in split_unescaped_pipe(marker.group(2).strip()))
+    raw_specs = split_unescaped_pipe_with_offsets(marker.group(2), offset + marker.start(2))
+    stripped_specs = tuple(strip_cell_offsets(spec, offsets) for spec, offsets in raw_specs)
+    column_specs = tuple(spec for spec, _offsets in stripped_specs if spec)
+    column_spec_offsets = tuple(offsets for spec, offsets in stripped_specs if spec)
     if not column_specs:
         raise MarkTeXError("rich table requires at least one column", span(filename, offset, offset, source))
 
@@ -270,6 +241,8 @@ def parse_rich_table(
             return (
                 RichTableNode(
                     column_specs,
+                    tuple("mos" for _spec in column_specs),
+                    column_spec_offsets,
                     tuple(rows),
                     tuple(cell_offsets),
                     span(filename, start_offset, offset, source),

@@ -63,12 +63,34 @@ class Strong:
 
 
 @dataclass(frozen=True)
+class Strikethrough:
+    children: tuple["InlineNode", ...]
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "kind": "strikethrough",
+            "children": [child.to_json() for child in self.children],
+            "origin": _origin(self.origin),
+        }
+
+
+@dataclass(frozen=True)
 class InlineCode:
     value: str
     origin: SourceSpan | None = None
 
     def to_json(self) -> dict[str, object]:
         return {"kind": "inline_code", "value": self.value, "origin": _origin(self.origin)}
+
+
+@dataclass(frozen=True)
+class LineBreak:
+    hard: bool
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {"kind": "line_break", "hard": self.hard, "origin": _origin(self.origin)}
 
 
 @dataclass(frozen=True)
@@ -130,7 +152,9 @@ InlineNode: TypeAlias = (
     | InlineExpression
     | Emphasis
     | Strong
+    | Strikethrough
     | InlineCode
+    | LineBreak
     | Link
     | Image
     | FootnoteRef
@@ -230,6 +254,61 @@ class Table:
 
 
 @dataclass(frozen=True)
+class ListItem:
+    children: tuple["Block", ...]
+    checked: bool | None = None
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "kind": "list_item",
+            "checked": self.checked,
+            "children": [object_to_json(child) for child in self.children],
+            "origin": _origin(self.origin),
+        }
+
+
+@dataclass(frozen=True)
+class ListBlock:
+    ordered: bool
+    start: int
+    tight: bool
+    items: tuple[ListItem, ...]
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "kind": "list",
+            "ordered": self.ordered,
+            "start": self.start,
+            "tight": self.tight,
+            "items": [item.to_json() for item in self.items],
+            "origin": _origin(self.origin),
+        }
+
+
+@dataclass(frozen=True)
+class BlockQuote:
+    children: tuple["Block", ...]
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "kind": "blockquote",
+            "children": [object_to_json(child) for child in self.children],
+            "origin": _origin(self.origin),
+        }
+
+
+@dataclass(frozen=True)
+class ThematicBreak:
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {"kind": "thematic_break", "origin": _origin(self.origin)}
+
+
+@dataclass(frozen=True)
 class ConditionalBranch:
     condition: Any
     body: tuple["Block", ...]
@@ -308,7 +387,9 @@ class ScopeClose:
         return {"kind": "scope_close", "key": self.key, "origin": _origin(self.origin)}
 
 
-Block: TypeAlias = Paragraph | Heading | CodeBlock | Table | Conditional
+Block: TypeAlias = (
+    Paragraph | Heading | CodeBlock | Table | ListBlock | BlockQuote | ThematicBreak | Conditional
+)
 MarkTeXObject: TypeAlias = DocumentPatch | ScopePush | ScopeClose | Block | InlineNode
 
 
