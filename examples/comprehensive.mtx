@@ -19,7 +19,7 @@ Prepared by [$ author ]. This page is [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ].
 
 This paragraph covers *emphasis*, **strong text**, `inline code`, a
 [project link](https://example.com/marktex), an image placeholder
-![MarkTeX logo](examples/assets/logo.pdf), a footnote reference[^overview], and a citation
+![MarkTeX logo](assets/logo.pdf), a footnote reference[^overview], and a citation
 reference [^ cite: Knuth84, pages=12-15 ].
 
 This paragraph spans
@@ -90,7 +90,7 @@ Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
 | Left | Center | Right |
 | :--- | :----: | ----: |
 | pipe table | **strong** | footnote[^pipe-note] |
-| image | ![Logo](examples/assets/logo.pdf) | `code` |
+| image | ![Logo](assets/logo.pdf) | `code` |
 
 ---
 
