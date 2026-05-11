@@ -937,5 +937,516 @@ class CliTests(unittest.TestCase):
             self.assertTrue((out_dir / "paper.tex").exists())
 
 
+class FallbackSyntaxTests(unittest.TestCase):
+    def test_setext_heading_h1_lowers(self) -> None:
+        build = build_document("Title\n=====\n\nBody\n", filename="test.mtx")
+        self.assertIn(r"\section{Title}", build.target_text)
+
+    def test_setext_heading_h2_lowers(self) -> None:
+        build = build_document("Subtitle\n--------\n\nBody\n", filename="test.mtx")
+        self.assertIn(r"\subsection{Subtitle}", build.target_text)
+
+    def test_thematic_break_lowers(self) -> None:
+        build = build_document("Before\n\n---\n\nAfter\n", filename="test.mtx")
+        self.assertIn(r"\par\noindent\rule{\linewidth}{0.4pt}\par", build.target_text)
+
+    def test_tilde_fenced_code_block_lowers(self) -> None:
+        build = build_document("~~~\ncode block\n~~~\n", filename="test.mtx")
+        self.assertIn(r"\begin{verbatim}", build.target_text)
+        self.assertIn("code block", build.target_text)
+
+    def test_indented_code_block_lowers(self) -> None:
+        build = build_document("    indented code\n", filename="test.mtx")
+        self.assertIn(r"\begin{verbatim}", build.target_text)
+        self.assertIn("indented code", build.target_text)
+
+    def test_blockquote_lowers(self) -> None:
+        build = build_document("> Quoted text\n", filename="test.mtx")
+        self.assertIn(r"\begin{quote}", build.target_text)
+        self.assertIn("Quoted text", build.target_text)
+        self.assertIn(r"\end{quote}", build.target_text)
+
+    def test_checked_task_list_item_lowers(self) -> None:
+        build = build_document("- [x] Done item\n", filename="test.mtx")
+        self.assertIn(r"\item[{[x]}]", build.target_text)
+        self.assertIn("Done item", build.target_text)
+
+    def test_unchecked_task_list_item_lowers(self) -> None:
+        build = build_document("- [ ] Todo item\n", filename="test.mtx")
+        self.assertIn(r"\item[{[ ]}]", build.target_text)
+        self.assertIn("Todo item", build.target_text)
+
+    def test_pipe_table_center_alignment(self) -> None:
+        build = build_document(
+            "| A |\n| :---: |\n| x |\n",
+            filename="test.mtx",
+        )
+        self.assertIn("{c}", build.target_text)
+
+    def test_pipe_table_right_alignment(self) -> None:
+        build = build_document(
+            "| A |\n| ---: |\n| x |\n",
+            filename="test.mtx",
+        )
+        self.assertIn("{r}", build.target_text)
+
+    def test_pipe_table_mixed_alignments(self) -> None:
+        build = build_document(
+            "| L | C | R |\n| :--- | :---: | ---: |\n| a | b | c |\n",
+            filename="test.mtx",
+        )
+        self.assertIn("l", build.target_text)
+        self.assertIn("c", build.target_text)
+        self.assertIn("r", build.target_text)
+
+    def test_escaped_pipe_in_pipe_table_cell(self) -> None:
+        build = build_document(
+            "| A |\n| --- |\n| a\\|b |\n",
+            filename="test.mtx",
+        )
+        self.assertIn("a|b", build.target_text)
+
+    def test_link_reference_definition_resolves_inline_link(self) -> None:
+        build = build_document(
+            "[link text][myref]\n\n[myref]: https://example.com\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\href{https://example.com}", build.target_text)
+        self.assertIn("link text", build.target_text)
+
+
+class InlineParserTests(unittest.TestCase):
+    def test_double_underscore_strong_lowers(self) -> None:
+        build = build_document("__bold text__\n", filename="test.mtx")
+        self.assertIn(r"\textbf{bold text}", build.target_text)
+
+    def test_underscore_emphasis_lowers(self) -> None:
+        build = build_document("_italic text_\n", filename="test.mtx")
+        self.assertIn(r"\emph{italic text}", build.target_text)
+
+    def test_inline_image_lowers(self) -> None:
+        build = build_document("![alt text](figure.pdf)\n", filename="test.mtx")
+        self.assertIn(r"\includegraphics{figure.pdf}", build.target_text)
+
+    def test_strikethrough_lowers(self) -> None:
+        build = build_document("~~struck~~\n", filename="test.mtx")
+        self.assertIn(r"\sout{struck}", build.target_text)
+        self.assertIn(r"\usepackage[normalem]{ulem}", build.target_text)
+
+    def test_backslash_at_end_of_paragraph_is_literal(self) -> None:
+        # Trailing backslash with no following character hits the else branch
+        build = build_document("text\\\n", filename="test.mtx")
+        self.assertIn("text", build.target_text)
+
+    def test_code_span_space_stripping(self) -> None:
+        # A code span with a leading and trailing space and non-blank interior
+        build = build_document("`` ` code ` ``\n", filename="test.mtx")
+        self.assertIn(r"\texttt{` code `}", build.target_text)
+
+    def test_reference_style_link_resolves(self) -> None:
+        build = build_document(
+            "[link text][myref]\n\n[myref]: https://example.com\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\href{https://example.com}", build.target_text)
+        self.assertIn("link text", build.target_text)
+
+    def test_image_reference_style_resolves(self) -> None:
+        build = build_document(
+            "![alt][fig]\n\n[fig]: figure.pdf\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\includegraphics{figure.pdf}", build.target_text)
+
+    def test_inline_expression_in_paragraph(self) -> None:
+        build = build_document("[$ 1 + 1 ]\n", filename="test.mtx")
+        self.assertIn("2", build.target_text)
+
+
+class BibtexEdgeCaseTests(unittest.TestCase):
+    def test_duplicate_key_fails(self) -> None:
+        from marktex.bibliography import load_bib_resources
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "refs.bib"
+            path.write_text(
+                "@article{Same, author={A}, title={T}, year={2020}}\n"
+                "@book{Same, author={B}, title={U}, year={2021}}\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(MarkTeXError, "duplicate bibliography key: Same"):
+                load_bib_resources((path,))
+
+    def test_file_not_found_fails(self) -> None:
+        from marktex.bibliography import parse_bibtex_file
+
+        with self.assertRaisesRegex(MarkTeXError, "bibliography file cannot be read"):
+            parse_bibtex_file(Path("/nonexistent/refs.bib"))
+
+    def test_paren_delimited_entry(self) -> None:
+        from marktex.bibliography import parse_bibtex_file
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "refs.bib"
+            path.write_text(
+                "@article(Paren1, author={Alice}, title={Test}, year={2020})\n",
+                encoding="utf-8",
+            )
+            entries = parse_bibtex_file(path)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].key, "Paren1")
+
+    def test_comment_entry_is_ignored(self) -> None:
+        from marktex.bibliography import parse_bibtex_file
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "refs.bib"
+            path.write_text(
+                "@comment{This is a comment}\n"
+                "@article{Real, author={Alice}, title={T}, year={2020}}\n",
+                encoding="utf-8",
+            )
+            entries = parse_bibtex_file(path)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].key, "Real")
+
+    def test_quoted_string_value(self) -> None:
+        from marktex.bibliography import parse_bibtex_file
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "refs.bib"
+            path.write_text(
+                '@article{Q, author="Quoted Author", title="Test", year="2022"}\n',
+                encoding="utf-8",
+            )
+            entries = parse_bibtex_file(path)
+        self.assertEqual(entries[0].fields["author"], "Quoted Author")
+
+    def test_numeric_field_value(self) -> None:
+        from marktex.bibliography import parse_bibtex_file
+
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "refs.bib"
+            path.write_text(
+                "@article{N, author={Alice}, title={T}, year=2023}\n",
+                encoding="utf-8",
+            )
+            entries = parse_bibtex_file(path)
+        self.assertEqual(entries[0].fields["year"], "2023")
+
+
+class BibliographyCitationModeTests(unittest.TestCase):
+    def _make_source(self, directory: Path, bib: str, style: str, body: str) -> Path:
+        (directory / "refs.bib").write_text(bib, encoding="utf-8")
+        (directory / "style.mtxcs").write_text(style, encoding="utf-8")
+        source = directory / "paper.mtx"
+        source.write_text(
+            "!# bib: refs.bib\n!# citestyle: style.mtxcs\n" + body,
+            encoding="utf-8",
+        )
+        return source
+
+    def test_author_page_citation_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = self._make_source(
+                directory,
+                "@article{A, author={Smith}, title={T}, year={2020}}\n",
+                "style: name=s; citation: mode=author-page, form=paren;",
+                "See [^ cite: A ].\n",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        # author-page mode: inline citation shows author only (no year)
+        self.assertIn("(Smith)", build.target_text)
+        # inline citation "(Smith)" should not contain the year
+        citation_pos = build.target_text.index("(Smith)")
+        citation_text = build.target_text[citation_pos : citation_pos + 10]
+        self.assertNotIn("2020", citation_text)
+
+    def test_author_page_citation_with_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = self._make_source(
+                directory,
+                "@article{A, author={Smith}, title={T}, year={2020}}\n",
+                "style: name=s; citation: mode=author-page, form=paren, locator-prefix=` `;",
+                "See [^ cite: A, page=42 ].\n",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn("Smith", build.target_text)
+        self.assertIn("42", build.target_text)
+
+    def test_superscript_citation_form(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = self._make_source(
+                directory,
+                "@article{A, author={Jones}, title={T}, year={2021}}\n",
+                "style: name=s; citation: mode=numeric, form=superscript;",
+                "Claim [^ cite: A ].\n",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn(r"\textsuperscript{", build.target_text)
+
+    def test_paren_citation_form(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            source = self._make_source(
+                directory,
+                "@article{A, author={Lee}, title={T}, year={2022}}\n",
+                "style: name=s; citation: mode=numeric, form=paren;",
+                "See [^ cite: A ].\n",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn("(1)", build.target_text)
+
+    def test_sort_by_key(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@article{Zzz, author={Zeta}, title={Z}, year={2020}}\n"
+                "@article{Aaa, author={Alpha}, title={A}, year={2020}}\n",
+                encoding="utf-8",
+            )
+            (directory / "style.mtxbs").write_text(
+                "style: name=s; "
+                "references: title=Sources, include=all, sort=key, placement=inline, label=none; "
+                "template: default, author, title;",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n!# bibstyle: style.mtxbs\n[^ cite: Zzz ]. [^ cite: Aaa ].\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        aaa_pos = build.target_text.index("Alpha")
+        zzz_pos = build.target_text.index("Zeta")
+        self.assertLess(aaa_pos, zzz_pos)
+
+    def test_sort_by_author_title(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@article{X, author={Zzz}, title={Alpha}, year={2020}}\n"
+                "@article{Y, author={Aaa}, title={Zeta}, year={2020}}\n",
+                encoding="utf-8",
+            )
+            (directory / "style.mtxbs").write_text(
+                "style: name=s; "
+                "references: title=Sources, include=all, sort=author-title, placement=inline, label=none; "
+                "template: default, author, title;",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n!# bibstyle: style.mtxbs\n[^ cite: X ]. [^ cite: Y ].\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        aaa_pos = build.target_text.index("Aaa")
+        zzz_pos = build.target_text.index("Zzz")
+        self.assertLess(aaa_pos, zzz_pos)
+
+    def test_bibliography_label_key(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@article{MyKey, author={A}, title={T}, year={2020}}\n",
+                encoding="utf-8",
+            )
+            (directory / "style.mtxbs").write_text(
+                "style: name=s; "
+                "references: title=Sources, include=all, sort=key, placement=inline, label=key; "
+                "template: default, author, title;",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n!# bibstyle: style.mtxbs\nNo cite.\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn("[MyKey]", build.target_text)
+
+    def test_doi_field_rendered_as_hyperlink(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@article{A, author={Alice}, title={T}, year={2020}, doi={10.1234/test}}\n",
+                encoding="utf-8",
+            )
+            (directory / "style.mtxbs").write_text(
+                "style: name=s; "
+                "references: title=Sources, include=all, sort=key, placement=inline, label=none; "
+                "template: default, doi;",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n!# bibstyle: style.mtxbs\nNo cite.\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertIn(r"\href{https://doi.org/10.1234/test}", build.target_text)
+
+
+class RuntimeApiTests(unittest.TestCase):
+    def test_session_raw_creates_raw_string(self) -> None:
+        from marktex.mos import RawString
+
+        session = runtime.RuntimeSession()
+        result = session.raw("hello")
+        self.assertIsInstance(result, RawString)
+        self.assertEqual(result.text, "hello")
+
+    def test_session_tuple_value_creates_tuple(self) -> None:
+        from marktex.mos import TupleValue
+
+        session = runtime.RuntimeSession()
+        result = session.tuple_value("a", "b")
+        self.assertIsInstance(result, TupleValue)
+        self.assertEqual(len(result.items), 2)
+
+    def test_session_scope_push_and_close_appended_to_events(self) -> None:
+        from marktex.core import ScopeClose, ScopePush
+
+        session = runtime.RuntimeSession()
+        push = session.scope_push("myscope", font="Times")
+        close = session.scope_close("myscope")
+        session.invoke(push)
+        session.invoke(close)
+        events = session.finish()
+        self.assertIsInstance(events[0], ScopePush)
+        self.assertIsInstance(events[1], ScopeClose)
+
+    def test_session_scope_push_with_non_default_scope(self) -> None:
+        session = runtime.RuntimeSession()
+        push = session.scope_push("k", scope="mycontext")
+        self.assertIn("scope", push.kwargs)
+
+    def test_session_drain_returns_and_clears(self) -> None:
+        session = runtime.RuntimeSession()
+        session.invoke(session.document_patch("layout"))
+        drained = session.drain()
+        self.assertEqual(len(drained), 1)
+        self.assertEqual(len(session.finish()), 0)
+
+    def test_session_reset_clears_events(self) -> None:
+        session = runtime.RuntimeSession()
+        session.invoke(session.document_patch("layout"))
+        session.reset()
+        self.assertEqual(len(session.finish()), 0)
+
+    def test_module_level_builders_return_correct_types(self) -> None:
+        from marktex.core import (
+            BlockQuote,
+            Emphasis,
+            Heading,
+            Image,
+            InlineCode,
+            LineBreak,
+            Link,
+            ListBlock,
+            ListItem,
+            Paragraph,
+            Strikethrough,
+            Strong,
+            Text,
+            ThematicBreak,
+        )
+
+        self.assertIsInstance(runtime.text("hi"), Text)
+        self.assertIsInstance(runtime.paragraph("hi"), Paragraph)
+        self.assertIsInstance(runtime.heading(1, "Title"), Heading)
+        self.assertIsInstance(runtime.emphasis("em"), Emphasis)
+        self.assertIsInstance(runtime.strong("bold"), Strong)
+        self.assertIsInstance(runtime.strikethrough("strike"), Strikethrough)
+        self.assertIsInstance(runtime.inline_code("code"), InlineCode)
+        self.assertIsInstance(runtime.line_break(), LineBreak)
+        self.assertIsInstance(runtime.link("https://x.com", "label"), Link)
+        self.assertIsInstance(runtime.image("alt", "img.pdf"), Image)
+        self.assertIsInstance(runtime.thematic_break(), ThematicBreak)
+        item = runtime.list_item(runtime.paragraph("item"))
+        self.assertIsInstance(item, ListItem)
+        lb = runtime.list_block(item)
+        self.assertIsInstance(lb, ListBlock)
+        bq = runtime.blockquote(runtime.paragraph("quoted"))
+        self.assertIsInstance(bq, BlockQuote)
+
+    def test_session_document_method_returns_canonical_document(self) -> None:
+        from marktex.core import Document
+
+        session = runtime.RuntimeSession()
+        doc = session.document(blocks=(runtime.paragraph("hello"),))
+        self.assertIsInstance(doc, Document)
+        self.assertEqual(len(doc.blocks), 1)
+
+    def test_module_level_call_and_document_patch(self) -> None:
+        from marktex.core import DocumentPatch
+        from marktex.mos import CallUnit
+
+        call = runtime.call("layout", context="document")
+        self.assertIsInstance(call, CallUnit)
+        patch = runtime.document_patch("layout")
+        self.assertIsInstance(patch, DocumentPatch)
+
+    def test_module_level_drain_and_reset_operate_on_default_session(self) -> None:
+        runtime.reset()
+        runtime.invoke(runtime.document_patch("layout"))
+        drained = runtime.drain()
+        self.assertEqual(len(drained), 1)
+        self.assertEqual(len(runtime.finish()), 0)
+        runtime.reset()
+
+
+class SerdeRoundTripTests(unittest.TestCase):
+    def _round_trip(self, source: str) -> None:
+        from marktex.driver.serde import document_from_json
+
+        build = build_document(source, filename="test.mtx")
+        serialized = build.document.to_json()
+        restored = document_from_json(serialized)
+        self.assertEqual(restored.to_json(), serialized)
+
+    def test_list_block_round_trip(self) -> None:
+        self._round_trip("- Item one\n- Item two\n")
+
+    def test_ordered_list_block_round_trip(self) -> None:
+        self._round_trip("1. First\n2. Second\n")
+
+    def test_blockquote_round_trip(self) -> None:
+        self._round_trip("> Quoted text here\n")
+
+    def test_thematic_break_round_trip(self) -> None:
+        self._round_trip("Before\n\n---\n\nAfter\n")
+
+    def test_scope_push_event_round_trip(self) -> None:
+        from marktex.driver.serde import event_from_json
+
+        build = build_document("!@ font=Times\nHello\n!!@\n", filename="test.mtx")
+        push_events = [e for e in build.document.events if hasattr(e, "kwargs")]
+        self.assertTrue(push_events)
+        for event in push_events:
+            serialized = event.to_json()
+            restored = event_from_json(serialized)
+            self.assertEqual(restored.to_json(), serialized)
+
+    def test_scope_close_event_round_trip(self) -> None:
+        from marktex.core import ScopeClose
+        from marktex.driver.serde import event_from_json
+
+        build = build_document("!@ mykey\nHello\n!!@ mykey\n", filename="test.mtx")
+        close_events = [e for e in build.document.events if isinstance(e, ScopeClose)]
+        self.assertTrue(close_events)
+        for event in close_events:
+            serialized = event.to_json()
+            restored = event_from_json(serialized)
+            self.assertEqual(restored.to_json(), serialized)
+
+    def test_task_list_item_checked_round_trip(self) -> None:
+        self._round_trip("- [x] Done\n- [ ] Todo\n")
+
+
 if __name__ == "__main__":
     unittest.main()
