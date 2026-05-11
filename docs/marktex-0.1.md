@@ -62,7 +62,7 @@ not a global function.
 | `--no-host` | Supported restricted mode |
 | MOS raw strings, frames, tuples, escapes, raw literals | Supported |
 | Schema-driven value shading | Supported |
-| `!#` document events | Supported; backend lowers layout only |
+| `!#` document/page directives | Supported; backend lowers layout, margins, and body page setup |
 | `!@` and `!!@` scope events | Supported in state/EIR |
 | Python `$$$` host blocks | Supported for trusted input |
 | Inline `[$ ... ]` expressions | Supported |
@@ -127,10 +127,11 @@ mtxc paper.mtx --diagnostic-format json
 
 `-o -` writes a single text artifact to stdout. It is invalid with multiple
 artifacts. `--emit pdf` is invalid because `mtxc` is not a PDF build driver.
-Any target other than `lualatex` is invalid in 0.1. `--from` is a required
-semantic label when input is not `.mtx`; `mtxc` does not infer a stage from the
-file extension. For example, `--from ast paper.backend-ir.json` fails because
-the artifact envelope kind is `backend-ir`, not `ast`.
+Any target other than `lualatex` is invalid in 0.1. CLI finite options are
+trimmed before enum validation. `--from` is a required semantic label when input
+is not `.mtx`; `mtxc` does not infer a stage from the file extension. For
+example, `--from ast paper.backend-ir.json` fails because the artifact envelope
+kind is `backend-ir`, not `ast`.
 
 Artifact names are deterministic. For the `lualatex` target, the target
 artifact uses `.tex`:
@@ -328,9 +329,14 @@ syntax:
 
 becomes a scope push with key `""` and kwarg `font="Times"`.
 
-### Value Shading
+### Finite Values And Value Shading
 
-Schema may shade a raw value into a no-argument nested call unit.
+MOS itself still passes values as raw strings. Finite option domains are checked
+by the semantic function that consumes the call. That consumer trims and
+normalizes a lookup copy, then accepts only its declared values.
+
+Schema may also shade a raw value into a no-argument nested call unit before
+semantic execution.
 
 Rule:
 
@@ -338,7 +344,8 @@ Rule:
 2. Trim only a lookup copy.
 3. If the current value context has a matching `ShadeSpec`, replace the value
    with that no-argument call unit.
-4. Otherwise preserve the original raw string.
+4. Otherwise preserve the original raw string and let the semantic consumer
+   decide whether it is valid.
 
 Built-in examples:
 
@@ -350,13 +357,14 @@ resolves through schema data into layout value calls with payloads such as
 `paper="a4paper"` and `orientation="landscape"`. Removing `A4` from schema data
 does not change MOS parsing; it only changes resolution.
 
-Forced raw literals disable shading:
+Forced raw literals disable schema shading, not semantic validation:
 
 ```marktex
 !# layout: `A4`
 ```
 
-passes the raw string `A4`.
+passes the raw string `A4`. The `layout` semantic function may still accept that
+literal because it owns paper-name normalization.
 
 ## 7. Document Directives
 
@@ -368,9 +376,11 @@ passes the raw string `A4`.
 !# bib: main.bib
 !# bib+: appendix.bib
 !# bib-: old.bib
+!# newpage
 ```
 
-Each top-level call becomes a document-level event:
+Before the first body block, stateful top-level calls become document-level
+events:
 
 ```text
 DocumentPatch(CallUnit(...))
@@ -387,6 +397,22 @@ Multiple root calls are allowed:
 
 This is equivalent to two document directive events.
 
+After body content has begun, `!#` is planned by each directive head:
+
+- page-model directives such as `layout` and `margin` create a pending
+  `PageSetup` before the next emitted block;
+- state/config directives such as `bib`, `bib+`, `bib-`, `bibstyle`, and
+  `citestyle` update document state and do not create a page break;
+- `newpage` creates an immediate `PageBreak`.
+
+Consecutive page-model directives coalesce into one pending page setup. A
+trailing page-model directive does not create a blank page. `newpage` is the
+only exception: it is effective at the beginning, middle, or end of a document,
+even when no body content follows it. `newpage` merges with a previous empty
+page transition, such as a pending `PageSetup` or a consecutive `newpage`
+without intervening content, but later page-model directives do not merge
+backward into that `newpage`.
+
 Built-in document heads in 0.1:
 
 ```text
@@ -397,11 +423,29 @@ bib+
 bib-
 bibstyle
 citestyle
+newpage
 ```
 
-The LuaLaTeX backend currently lowers `layout` to `geometry` options for
-`A4`, `A5`, `Letter`, `landscape`, and `portrait`. Other document events remain
-visible in AST/EIR for future backend work.
+`layout` accepts paper aliases (`A4`, `A5`, `Letter`, or
+`paper=a4paper|a5paper|letterpaper`), explicit `width=` / `height=`, optional
+`orientation=portrait|landscape`, and margin keys `top`, `bottom`, `left`, and
+`right`. In one call, size is applied first, then orientation, then margins:
+
+```marktex
+!# layout: paper=A4, orientation=landscape, top=20mm
+!# layout: width=100mm, height=200mm, orientation=landscape
+```
+
+Paper aliases set width and height with portrait defaults. Orientation is an
+atomic transform on the current page size: if the current width/height already
+match the requested orientation it does nothing; otherwise it transposes width
+and height. All canonical layout events store explicit `width` and `height`,
+not backend-specific paper names.
+
+The LuaLaTeX backend lowers initial layout events to `geometry` package options
+and body `PageSetup` blocks to `\clearpage` plus `\newgeometry{...}`. `newpage`
+lowers to `\clearpage` and is not a document event. Other document events
+remain visible in AST/EIR for future backend work.
 
 ## 8. Scopes
 
@@ -411,7 +455,9 @@ visible in AST/EIR for future backend work.
 scope_push(key, *args, scope="DEFAULT", **kwargs)
 ```
 
-0.1 stores this as a `ScopePush` object.
+0.1 stores this as a `ScopePush` object. The call head is the frame key used by
+`!!@` matching. The optional `scope` kwarg is a semantic target selector for
+schema/backend interpretation; it is not the close key.
 
 Examples:
 
@@ -439,9 +485,31 @@ ScopePush(key="w", args=[], kwargs={})
 ScopePush(key="w", args=[], kwargs={"font": "Times"})
 ```
 
-Names such as `w`, `e`, and `h1` are scope keys. They can change how the
-default scope is interpreted by schema and backend rules, but they are still
-data in the scope event.
+Frame keys are ordinary data and close by exact key match. Scope target values
+are defined separately. Built-in 0.1 target values are:
+
+```text
+DEFAULT
+w e
+h1 h2 h3 h4 h5 h6
+```
+
+When `scope` is omitted, the target is `DEFAULT`. Explicit `scope=DEFAULT` is
+canonicalized away in the stored event, while EIR state records the target as
+`DEFAULT`.
+
+```marktex
+!@ w: font=Times, scope=e
+```
+
+means:
+
+```text
+ScopePush(key="w", args=[], kwargs={"font": "Times", "scope": "e"})
+```
+
+This opens a frame closed by `!!@ w`, while marking the event as targeting
+scope `e`. Unknown target values are compile errors.
 
 `!!@` closes the nearest active scope frame with a matching key:
 
@@ -515,8 +583,10 @@ marktex.footnote_definition(label, *children)
 `marktex.invoke()` accepts only `DocumentPatch`, `ScopePush`, and `ScopeClose`
 objects in 0.1. Runtime constructors normalize Python values into MOS values:
 strings become raw MOS strings, tuples and lists become MOS tuples, and nested
-calls must be written with `marktex.call(...)`. Construction helpers return
-canonical core objects and are used by executable host artifacts.
+calls must be written with `marktex.call(...)`. `scope_push(..., scope=...)`
+accepts the same built-in scope targets as surface `scope=`. Construction
+helpers return canonical core objects and are used by executable host
+artifacts.
 
 `PAGE.CURRENT` and `PAGE.TOTAL` are symbolic values. They are never concrete
 during host execution.
@@ -613,6 +683,11 @@ Autolinks and raw HTML remain escaped document text. Unsupported
 Markdown-derived spelling usually remains paragraph text unless it collides
 with a recognized MarkTeX form that has to be diagnosed.
 
+A physical newline inside a paragraph is a MarkTeX hard line break. A backslash
+immediately followed by a physical newline is line continuation and contributes
+nothing. This intentionally differs from Markdown's soft/hard break rules:
+spaces are ordinary text characters in MarkTeX.
+
 Reference-style link and image definitions are MarkTeX fallback declarations,
 not a Markdown global pre-scan. Root definitions are visible to root content
 and child containers such as lists, block quotes, and conditional branches.
@@ -678,6 +753,7 @@ Rules:
 
 The 0.1 LuaLaTeX backend emits a simple `tabular`. Column MOS alignment lowers
 to `l`, `c`, or `r` when the column spec provides `align=left|center|right`.
+Unknown alignment values are diagnostics; omitted alignment defaults to `left`.
 
 Pipe tables use Markdown-style spelling as MarkTeX fallback syntax and lower
 to the same `Table` core object. Their alignment row is converted into
@@ -847,6 +923,8 @@ ListBlock
 ListItem
 BlockQuote
 ThematicBreak
+PageBreak
+PageSetup
 Conditional
 FootnoteDefinition
 DocumentPatch
@@ -925,6 +1003,8 @@ Lowering support:
 - task list items -> explicit `[ ]` or `[x]` item labels;
 - block quotes -> `quote`;
 - thematic breaks -> horizontal rules;
+- page breaks -> `\clearpage`;
+- page setup blocks -> `\clearpage` plus `\newgeometry{paperwidth=...,paperheight=...}`;
 - `PAGE.CURRENT` -> `\thepage{}`;
 - `PAGE.TOTAL` -> `\pageref{LastPage}`;
 - `PAGE.CURRENT == PAGE.TOTAL` conditionals -> a page/last-page test.
@@ -944,8 +1024,12 @@ The parser is schema-agnostic. Schema owns:
 
 - known call heads per context;
 - shorthand/no-argument value shading;
-- validation of explicit MarkTeX heads;
-- semantic lowerer identifiers.
+- validation of explicit MarkTeX heads.
+
+Semantic modules own finite domains, canonical core construction, and backend
+independent meaning. MOS and schema do not decide whether a string such as
+`A4`, `a4paper`, or `landscape` is valid for layout; the layout semantic
+function does that after explicit normalization.
 
 Built-in shorthand data lives in constants such as:
 
@@ -961,10 +1045,11 @@ LAYOUT_VALUE_SHADES = {
 ```
 
 Adding `Legal` paper, renaming `A4`, or removing `landscape` changes schema
-data and golden outputs only. It must not require a MOS parser change.
+data, semantic constants, and golden outputs only. It must not require a MOS
+parser change.
 
-Adding an entirely new semantic family may add a lowerer and backend support,
-but it still must not add tag logic to the parser.
+Adding an entirely new semantic family may add semantic validation and backend
+support, but it still must not add tag logic to the parser.
 
 ## 19. Error Policy
 
