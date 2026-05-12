@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from math import gcd
 
 from marktex.source import MarkTeXError, SourceSpan, span_from_range
 from marktex.surface.model import (
@@ -46,8 +47,25 @@ class _ListMarker:
     ordered: bool
     start: int
     indent: int
+    indent_kind: str | None
     marker_end: int
     content_start: int
+
+
+@dataclass
+class _ListItemBuilder:
+    marker: _ListMarker
+    consumed: list[FallbackLine]
+    segments: list[object]
+    has_blank: bool = False
+
+
+@dataclass
+class _ListBlockBuilder:
+    ordered: bool
+    start: int
+    items: list[_ListItemBuilder]
+    lines: list[FallbackLine]
 
 
 def parse_fallback_lines(lines: list[FallbackLine], *, filename: str, source: str) -> tuple[SurfaceNode, ...]:
@@ -80,12 +98,6 @@ class _FallbackParser:
                 nodes.append(fence_node)
                 continue
 
-            indented = parse_indented_code(lines, index, self.filename, self.source)
-            if indented is not None:
-                indented_node, index = indented
-                nodes.append(indented_node)
-                continue
-
             if is_thematic_break(line):
                 nodes.append(ThematicBreakNode(span_from_lines(self.filename, [line], self.source)))
                 index += 1
@@ -99,8 +111,8 @@ class _FallbackParser:
 
             list_block = self.parse_list(lines, index)
             if list_block is not None:
-                list_node, index = list_block
-                nodes.append(list_node)
+                list_nodes, index = list_block
+                nodes.extend(list_nodes)
                 continue
 
             table = parse_pipe_table(lines, index, self.filename, self.source)
@@ -149,70 +161,99 @@ class _FallbackParser:
             cursor,
         )
 
-    def parse_list(self, lines: list[FallbackLine], index: int) -> tuple[ListBlockNode, int] | None:
+    def parse_list(self, lines: list[FallbackLine], index: int) -> tuple[list[ListBlockNode], int] | None:
         first_marker = list_marker(lines[index])
-        if first_marker is None:
+        if first_marker is None or first_marker.indent != 0:
             return None
-        ordered = first_marker.ordered
-        start = first_marker.start
-        items: list[ListItemNode] = []
-        loose = False
-        cursor = index
+        run, cursor = collect_list_run(lines, index)
+        markers = [(position, marker) for position, line in enumerate(run) if (marker := list_marker(line)) is not None]
+        unit, indent_kind = list_indent_unit(markers, run, self.filename, self.source)
+        root_segments: list[object] = []
+        stack: list[_ListItemBuilder] = []
+        consumed_count = 0
 
-        while cursor < len(lines):
-            marker = list_marker(lines[cursor])
-            if marker is None or marker.ordered != ordered or marker.indent != first_marker.indent:
+        for line in run:
+            marker = list_marker(line)
+            if marker is not None:
+                level = list_marker_level(marker, unit)
+                if level > len(stack):
+                    raise MarkTeXError("list nesting cannot skip levels", span_from_lines(self.filename, [line], self.source))
+                parent_segments = root_segments if level == 0 else stack[level - 1].segments
+                block = current_list_block(parent_segments, marker, line, self.filename, self.source)
+                item = _ListItemBuilder(
+                    marker,
+                    [line],
+                    [line.slice(marker.content_start)],
+                )
+                block.items.append(item)
+                block.lines.append(line)
+                stack = stack[:level]
+                stack.append(item)
+                consumed_count += 1
+                continue
+
+            if not stack:
                 break
+            cont_item = continuation_item(stack, line, indent_kind, self.filename, self.source)
+            if cont_item is None:
+                break
+            cont_item.consumed.append(line)
+            if is_blank(line):
+                cont_item.segments.append(FallbackLine("", (line.start,)))
+                cont_item.has_blank = True
+                consumed_count += 1
+                continue
+            cont_item.segments.append(line.slice(cont_item.marker.content_start))
+            consumed_count += 1
 
-            item_start = cursor
-            consumed: list[FallbackLine] = [lines[cursor]]
-            item_lines: list[FallbackLine] = [lines[cursor].slice(marker.content_start)]
-            cursor += 1
-            item_has_blank = False
+        return [
+            self.finalize_list_block(block)
+            for block in root_segments
+            if isinstance(block, _ListBlockBuilder)
+        ], index + consumed_count
 
-            while cursor < len(lines):
-                line = lines[cursor]
-                next_marker = list_marker(line)
-                if (
-                    next_marker is not None
-                    and next_marker.ordered == ordered
-                    and next_marker.indent == first_marker.indent
-                ):
-                    break
-                if is_blank(line):
-                    consumed.append(line)
-                    item_lines.append(FallbackLine("", (line.start,)))
-                    item_has_blank = True
-                    cursor += 1
-                    continue
-                if leading_spaces(line.text) <= first_marker.indent:
-                    break
-                consumed.append(line)
-                item_lines.append(strip_continuation_indent(line, marker.content_start))
-                cursor += 1
-
-            item_lines = trim_blank_lines(item_lines)
-            checked = parse_task_marker(item_lines)
-            children = tuple(self.parse_blocks(item_lines))
-            items.append(
+    def finalize_list_block(self, block: _ListBlockBuilder) -> ListBlockNode:
+        item_nodes: list[ListItemNode] = []
+        loose = False
+        for item in block.items:
+            children, checked = self.finalize_list_item_segments(item.segments)
+            item_nodes.append(
                 ListItemNode(
-                    children,
+                    tuple(children),
                     checked,
-                    span_from_lines(self.filename, consumed or [lines[item_start]], self.source),
+                    span_from_lines(self.filename, item.consumed, self.source),
                 )
             )
-            loose = loose or item_has_blank or len(children) > 1
-
-        return (
-            ListBlockNode(
-                ordered,
-                start,
-                not loose,
-                tuple(items),
-                span_from_lines(self.filename, lines[index:cursor], self.source),
-            ),
-            cursor,
+            loose = loose or item.has_blank or len(children) > 1
+        return ListBlockNode(
+            block.ordered,
+            block.start,
+            not loose,
+            tuple(item_nodes),
+            span_from_lines(self.filename, block.lines, self.source),
         )
+
+    def finalize_list_item_segments(self, segments: list[object]) -> tuple[list[SurfaceNode], bool | None]:
+        normalized = list(segments)
+        checked: bool | None = None
+        if normalized and isinstance(normalized[0], FallbackLine):
+            checked, normalized[0] = parse_task_marker(normalized[0])
+        children: list[SurfaceNode] = []
+        line_group: list[FallbackLine] = []
+        for segment in normalized:
+            if isinstance(segment, FallbackLine):
+                line_group.append(segment)
+                continue
+            if line_group:
+                children.extend(self.parse_blocks(trim_blank_lines(line_group)))
+                line_group = []
+            if isinstance(segment, _ListBlockBuilder):
+                children.append(self.finalize_list_block(segment))
+                continue
+            raise MarkTeXError(f"unsupported list segment: {segment!r}")
+        if line_group:
+            children.extend(self.parse_blocks(trim_blank_lines(line_group)))
+        return children, checked
 
     def parse_paragraph(self, lines: list[FallbackLine], index: int) -> tuple[SurfaceNode, int]:
         paragraph: list[FallbackLine] = []
@@ -254,7 +295,6 @@ def starts_block(lines: list[FallbackLine], index: int) -> bool:
     return (
         is_link_reference_start(line)
         or is_fenced_code_start(line)
-        or is_indented_code_start(line)
         or is_thematic_break(line)
         or blockquote_content(line) is not None
         or list_marker(line) is not None
@@ -264,19 +304,12 @@ def starts_block(lines: list[FallbackLine], index: int) -> bool:
 
 
 def parse_atx_heading(line: FallbackLine, filename: str, source: str) -> HeadingNode | None:
-    match = re.match(r"^( {0,3})(#{1,6})(?:[ \t]+|$)(.*)$", line.text)
+    match = re.match(r"^(#{1,6}) (.*)$", line.text)
     if match is None:
         return None
-    raw_start = match.start(3)
-    raw_end = match.end(3)
-    raw_text = match.group(3)
-    closing = re.search(r"[ \t]+#+[ \t]*$", raw_text)
-    if closing is not None:
-        raw_end = raw_start + closing.start()
-    text_line = line.slice(raw_start, raw_end)
-    text_line = trim_line(text_line)
+    text_line = line.slice(match.start(2), match.end(2))
     return HeadingNode(
-        len(match.group(2)),
+        len(match.group(1)),
         text_line.text,
         text_line.offsets,
         span_from_lines(filename, [line], source),
@@ -290,10 +323,10 @@ def parse_fenced_code(
     match = fenced_code_open(opener)
     if match is None:
         return None
-    fence = match.group(2)
+    fence = match.group(1)
     marker = fence[0]
     length = len(fence)
-    info = match.group(3).strip()
+    info = match.group(2).strip()
     if marker == "`" and "`" in info:
         return None
     interpolated = info.startswith("$")
@@ -302,7 +335,7 @@ def parse_fenced_code(
     cursor = index + 1
     while cursor < len(lines):
         line = lines[cursor]
-        close = re.match(r"^( {0,3})([" + re.escape(marker) + r"]{" + str(length) + r",})[ \t]*$", line.text)
+        close = re.match(r"^([" + re.escape(marker) + r"]{" + str(length) + r",})$", line.text)
         if close is not None:
             return (
                 CodeFenceNode(
@@ -316,34 +349,6 @@ def parse_fenced_code(
         body.append(line.text)
         cursor += 1
     raise MarkTeXError("unclosed code fence", span_from_lines(filename, lines[index:], source))
-
-
-def parse_indented_code(
-    lines: list[FallbackLine], index: int, filename: str, source: str
-) -> tuple[CodeFenceNode, int] | None:
-    if not is_indented_code_start(lines[index]):
-        return None
-    cursor = index
-    consumed: list[FallbackLine] = []
-    body: list[str] = []
-    while cursor < len(lines):
-        line = lines[cursor]
-        if is_blank(line):
-            consumed.append(line)
-            body.append("")
-            cursor += 1
-            continue
-        if indentation(line.text) < 4:
-            break
-        consumed.append(line)
-        body.append(line.text[4:])
-        cursor += 1
-    while body and body[-1] == "":
-        body.pop()
-    return (
-        CodeFenceNode("", "\n".join(body) + ("\n" if body else ""), False, span_from_lines(filename, consumed, source)),
-        cursor,
-    )
 
 
 def parse_pipe_table(
@@ -366,7 +371,7 @@ def parse_pipe_table(
     rows.append(header)
     offsets.append(header_offsets)
     cursor = index + 2
-    while cursor < len(lines) and not is_blank(lines[cursor]) and "|" in lines[cursor].text:
+    while cursor < len(lines) and not is_blank(lines[cursor]) and lines[cursor].text.startswith("|"):
         cells_raw = split_pipe_row(lines[cursor])
         if len(cells_raw) != len(alignments):
             raise MarkTeXError(
@@ -408,7 +413,7 @@ def parse_link_reference(line: FallbackLine, filename: str, source: str) -> Link
 
 
 def is_blank(line: FallbackLine) -> bool:
-    return not line.text.strip()
+    return line.text == ""
 
 
 def is_link_reference_start(line: FallbackLine) -> bool:
@@ -419,99 +424,190 @@ def is_fenced_code_start(line: FallbackLine) -> bool:
     return fenced_code_open(line) is not None
 
 
-def is_indented_code_start(line: FallbackLine) -> bool:
-    return indentation(line.text) >= 4
-
-
 def is_pipe_table_start(lines: list[FallbackLine], index: int) -> bool:
     return (
         index + 1 < len(lines)
-        and "|" in lines[index].text
+        and lines[index].text.startswith("|")
         and alignment_cells(lines[index + 1]) is not None
     )
 
 
 def is_atx_heading_start(line: FallbackLine) -> bool:
-    return re.match(r"^( {0,3})(#{1,6})(?:[ \t]+|$)(.*)$", line.text) is not None
+    return re.match(r"^(#{1,6}) (.*)$", line.text) is not None
 
 
 def fenced_code_open(line: FallbackLine) -> re.Match[str] | None:
-    return re.match(r"^( {0,3})(`{3,}|~{3,})(.*)$", line.text)
+    return re.match(r"^(`{3,}|~{3,})(.*)$", line.text)
 
 
 def link_reference_match(line: FallbackLine) -> re.Match[str] | None:
-    return re.match(r"^ {0,3}\[([^\]]+)\]:[ \t]*(\S+)([ \t]+.*)?$", line.text)
+    return re.match(r"^\[([^\]]+)\]:[ \t]*(\S+)([ \t]+.*)?$", line.text)
 
 
 def is_thematic_break(line: FallbackLine) -> bool:
-    stripped = line.text.strip()
-    if len(stripped) < 3:
-        return False
-    compact = stripped.replace(" ", "").replace("\t", "")
-    return len(compact) >= 3 and compact[0] in "*-_" and set(compact) == {compact[0]}
+    return line.text in {"---", "***", "___"}
 
 
 def is_setext_underline(line: FallbackLine) -> bool:
-    stripped = line.text.strip()
-    return bool(stripped) and set(stripped) in ({"="}, {"-"})
+    return bool(line.text) and set(line.text) in ({"="}, {"-"})
 
 
 def blockquote_content(line: FallbackLine) -> FallbackLine | None:
-    match = re.match(r"^( {0,3})>[ \t]?", line.text)
-    if match is None:
+    if line.text == ">":
+        return line.slice(1)
+    if not line.text.startswith("> "):
         return None
-    return line.slice(match.end())
+    return line.slice(2)
 
 
 def list_marker(line: FallbackLine) -> _ListMarker | None:
-    bullet = re.match(r"^( {0,3})([*+-])(?:[ \t]+|$)", line.text)
+    bullet = re.match(r"^([ \t]*)([*+-]) (.*)$", line.text)
     if bullet is not None:
-        marker_end = len(bullet.group(1)) + 1
-        content_start = marker_end + post_marker_padding(line.text, marker_end)
-        return _ListMarker(False, 1, len(bullet.group(1)), marker_end, content_start)
-    ordered = re.match(r"^( {0,3})(\d{1,9})([.)])(?:[ \t]+|$)", line.text)
+        indent_text = bullet.group(1)
+        indent_width, indent_kind = structural_indent(indent_text)
+        marker_end = len(indent_text) + 1
+        return _ListMarker(False, 1, indent_width, indent_kind, marker_end, marker_end + 1)
+    ordered = re.match(r"^([ \t]*)(\d{1,9})([.)]) (.*)$", line.text)
     if ordered is not None:
-        marker_end = len(ordered.group(1)) + len(ordered.group(2)) + 1
-        content_start = marker_end + post_marker_padding(line.text, marker_end)
-        return _ListMarker(True, int(ordered.group(2)), len(ordered.group(1)), marker_end, content_start)
+        indent_text = ordered.group(1)
+        indent_width, indent_kind = structural_indent(indent_text)
+        marker_end = len(indent_text) + len(ordered.group(2)) + 1
+        return _ListMarker(True, int(ordered.group(2)), indent_width, indent_kind, marker_end, marker_end + 1)
     return None
 
 
-def post_marker_padding(text: str, marker_end: int) -> int:
-    padding = 0
-    index = marker_end
-    while index < len(text) and text[index] in " \t" and padding < 4:
-        padding += 4 if text[index] == "\t" else 1
-        index += 1
-    return index - marker_end if padding else 0
-
-
-def strip_continuation_indent(line: FallbackLine, width: int) -> FallbackLine:
-    index = min(width, len(line.text))
-    if line.text[:index].strip():
-        index = min(leading_spaces(line.text), len(line.text))
-    return line.slice(index)
-
-
-def parse_task_marker(lines: list[FallbackLine]) -> bool | None:
-    if not lines:
-        return None
-    line = lines[0]
-    match = re.match(r"^\[([ xX])\][ \t]+", line.text)
+def parse_task_marker(line: FallbackLine) -> tuple[bool | None, FallbackLine]:
+    match = re.match(r"^\[([ xX])\] ", line.text)
     if match is None:
+        return None, line
+    return match.group(1).lower() == "x", line.slice(match.end())
+
+
+def collect_list_run(lines: list[FallbackLine], index: int) -> tuple[list[FallbackLine], int]:
+    run: list[FallbackLine] = []
+    cursor = index
+    while cursor < len(lines):
+        line = lines[cursor]
+        marker = list_marker(line)
+        if marker is not None:
+            run.append(line)
+            cursor += 1
+            continue
+        if is_blank(line):
+            break
+        if leading_indent(line.text):
+            run.append(line)
+            cursor += 1
+            continue
+        break
+    return run, cursor
+
+
+def list_indent_unit(
+    markers: list[tuple[int, _ListMarker]],
+    lines: list[FallbackLine],
+    filename: str,
+    source: str,
+) -> tuple[int, str | None]:
+    for position, marker in markers:
+        if marker.indent_kind == "mixed":
+            raise MarkTeXError(
+                "list indentation cannot mix tabs and spaces",
+                span_from_lines(filename, [lines[position]], source),
+            )
+    kinds = {marker.indent_kind for _position, marker in markers if marker.indent_kind is not None}
+    if len(kinds) > 1:
+        first_mixed = next(position for position, marker in markers if marker.indent_kind in kinds)
+        raise MarkTeXError(
+            "list indentation cannot mix tabs and spaces",
+            span_from_lines(filename, [lines[first_mixed]], source),
+        )
+    positive = [marker.indent for _position, marker in markers if marker.indent > 0]
+    unit = 0
+    for value in positive:
+        unit = value if unit == 0 else gcd(unit, value)
+    return unit, next(iter(kinds)) if kinds else None
+
+
+def list_marker_level(marker: _ListMarker, unit: int) -> int:
+    if marker.indent == 0:
+        return 0
+    if unit == 0:
+        return 0
+    return marker.indent // unit
+
+
+def current_list_block(
+    segments: list[object],
+    marker: _ListMarker,
+    line: FallbackLine,
+    filename: str,
+    source: str,
+) -> _ListBlockBuilder:
+    if segments and isinstance(segments[-1], _ListBlockBuilder) and segments[-1].ordered == marker.ordered:
+        block = segments[-1]
+        if block.ordered:
+            expected = block.start + len(block.items)
+            if marker.start != expected:
+                raise MarkTeXError(
+                    f"ordered list marker must be {expected}",
+                    span_from_lines(filename, [line], source),
+                )
+        return block
+    block = _ListBlockBuilder(marker.ordered, marker.start, [], [])
+    segments.append(block)
+    return block
+
+
+def continuation_item(
+    stack: list[_ListItemBuilder],
+    line: FallbackLine,
+    indent_kind: str | None,
+    filename: str,
+    source: str,
+) -> _ListItemBuilder | None:
+    if is_blank(line):
+        return stack[-1]
+    kind = leading_indent_kind(line.text, span_from_lines(filename, [line], source))
+    if kind is not None and indent_kind is not None and kind != indent_kind:
+        raise MarkTeXError("list indentation cannot mix tabs and spaces", span_from_lines(filename, [line], source))
+    for item in reversed(stack):
+        if has_structural_prefix(line.text, item.marker.content_start):
+            return item
+    return None
+
+
+def structural_indent(text: str) -> tuple[int, str | None]:
+    if " " in text and "\t" in text:
+        return len(text), "mixed"
+    if not text:
+        return 0, None
+    return len(text), "tab" if text[0] == "\t" else "space"
+
+
+def leading_indent(text: str) -> str:
+    return text[: len(text) - len(text.lstrip(" \t"))]
+
+
+def leading_indent_kind(text: str, origin: SourceSpan) -> str | None:
+    indent = leading_indent(text)
+    if " " in indent and "\t" in indent:
+        raise MarkTeXError("list indentation cannot mix tabs and spaces", origin)
+    if not indent:
         return None
-    lines[0] = line.slice(match.end())
-    return match.group(1).lower() == "x"
+    return "tab" if indent[0] == "\t" else "space"
+
+
+def has_structural_prefix(text: str, width: int) -> bool:
+    return len(text) >= width and bool(text[:width]) and all(char in " \t" for char in text[:width])
 
 
 def split_pipe_row(line: FallbackLine) -> list[FallbackLine]:
-    row = trim_line(line)
+    if not line.text.startswith("|") or not line.text.endswith("|"):
+        return []
+    row = line.slice(1, len(line.text) - 1)
     parts = split_unescaped_pipe_with_offsets(row.text, row.offsets)
-    if parts and parts[0].text == "":
-        parts = parts[1:]
-    if parts and parts[-1].text == "":
-        parts = parts[:-1]
-    return [trim_line(part) for part in parts]
+    return [consume_cell_padding(part) for part in parts]
 
 
 def split_unescaped_pipe_with_offsets(text: str, offsets: tuple[int, ...]) -> list[FallbackLine]:
@@ -521,8 +617,8 @@ def split_unescaped_pipe_with_offsets(text: str, offsets: tuple[int, ...]) -> li
     index = 0
     while index < len(text):
         char = text[index]
-        if char == "\\" and index + 1 < len(text):
-            current.append(text[index + 1])
+        if char == "\\" and index + 1 < len(text) and text[index + 1] == "|":
+            current.append("|")
             current_offsets.append(offsets[index + 2])
             index += 2
             continue
@@ -545,7 +641,7 @@ def alignment_cells(line: FallbackLine) -> tuple[tuple[str, tuple[int, ...]], ..
         return None
     aligns: list[tuple[str, tuple[int, ...]]] = []
     for cell in cells:
-        marker = cell.text.strip()
+        marker = cell.text
         if not re.fullmatch(r":?-+:?", marker):
             return None
         if marker.startswith(":") and marker.endswith(":"):
@@ -563,6 +659,12 @@ def strict_table_row(
     return tuple(cell.text for cell in cells[:count]), tuple(cell.offsets for cell in cells[:count])
 
 
+def consume_cell_padding(cell: FallbackLine) -> FallbackLine:
+    start = 1 if cell.text.startswith(" ") else 0
+    end = len(cell.text) - 1 if cell.text.endswith(" ") and len(cell.text) > start else len(cell.text)
+    return cell.slice(start, end)
+
+
 def trim_blank_lines(lines: list[FallbackLine]) -> list[FallbackLine]:
     start = 0
     end = len(lines)
@@ -573,17 +675,8 @@ def trim_blank_lines(lines: list[FallbackLine]) -> list[FallbackLine]:
     return lines[start:end]
 
 
-def trim_line(line: FallbackLine) -> FallbackLine:
-    start = len(line.text) - len(line.text.lstrip())
-    end = len(line.text.rstrip())
-    if end < start:
-        end = start
-    return line.slice(start, end)
-
-
 def trim_paragraph_line(line: FallbackLine) -> FallbackLine:
-    start = len(line.text) - len(line.text.lstrip())
-    return line.slice(start)
+    return line
 
 
 def join_paragraph_lines(lines: list[FallbackLine]) -> tuple[str, tuple[int, ...]]:
@@ -602,19 +695,3 @@ def span_from_lines(filename: str, lines: list[FallbackLine], source: str) -> So
     if not lines:
         return SourceSpan(filename, 0, 0)
     return span_from_range(filename, lines[0].start, lines[-1].end, source)
-
-
-def indentation(text: str) -> int:
-    width = 0
-    for char in text:
-        if char == " ":
-            width += 1
-        elif char == "\t":
-            width += 4
-        else:
-            break
-    return width
-
-
-def leading_spaces(text: str) -> int:
-    return len(text) - len(text.lstrip(" "))

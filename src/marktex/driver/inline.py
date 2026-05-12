@@ -172,7 +172,7 @@ class _InlineParser:
         while run_end < end and self.text[run_end] == "`":
             run_end += 1
         marker = self.text[cursor:run_end]
-        close = self.text.find(marker, run_end, end)
+        close = self.text.find(marker, run_end, self.physical_line_end(cursor, end))
         if close == -1:
             return None
         raw = self.text[run_end:close].replace("\n", " ")
@@ -183,8 +183,8 @@ class _InlineParser:
     def parse_strikethrough(self, cursor: int, end: int) -> tuple[InlineNode, int] | None:
         if not self.text.startswith("~~", cursor):
             return None
-        close = self.text.find("~~", cursor + 2, end)
-        if close == -1:
+        close = self.find_closing_pair(cursor + 2, self.physical_line_end(cursor, end), "~~")
+        if close is None:
             return None
         return (
             Strikethrough(self.parse_child(cursor + 2, close), self.token_span(cursor, close + 2)),
@@ -193,10 +193,8 @@ class _InlineParser:
 
     def parse_strong(self, cursor: int, end: int) -> tuple[InlineNode, int] | None:
         for marker in ("**", "__"):
-            if self.text.startswith(marker, cursor) and delimiter_can_open(
-                self.text, cursor, marker[0], 2
-            ):
-                close = self.find_closing_delimiter(cursor + 2, end, marker[0], 2)
+            if self.text.startswith(marker, cursor):
+                close = self.find_closing_pair(cursor + 2, self.physical_line_end(cursor, end), marker)
                 if close is not None:
                     return (
                         Strong(
@@ -211,9 +209,7 @@ class _InlineParser:
         marker = self.text[cursor]
         if marker not in "*_" or (cursor + 1 < end and self.text[cursor + 1] == marker):
             return None
-        if not delimiter_can_open(self.text, cursor, marker, 1):
-            return None
-        close = self.find_closing_delimiter(cursor + 1, end, marker, 1)
+        close = self.find_closing_pair(cursor + 1, self.physical_line_end(cursor, end), marker)
         if close is None:
             return None
         return Emphasis(self.parse_child(cursor + 1, close), self.token_span(cursor, close + 1)), close + 1
@@ -290,18 +286,17 @@ class _InlineParser:
             cursor += 1
         return None
 
-    def find_closing_delimiter(
-        self, cursor: int, end: int, marker: str, length: int
-    ) -> int | None:
+    def find_closing_pair(self, cursor: int, end: int, marker: str) -> int | None:
         while cursor < end:
+            if self.text[cursor] == "\\":
+                cursor += 2
+                continue
             if self.text[cursor] == "`":
                 code = self.parse_code_span(cursor, end)
                 if code is not None:
                     cursor = code[1]
                     continue
-            if self.text.startswith(marker * length, cursor) and delimiter_can_close(
-                self.text, cursor, marker, length
-            ):
+            if self.text.startswith(marker, cursor):
                 return cursor
             cursor += 1
         return None
@@ -366,38 +361,6 @@ def normalize_reference_label(label: str) -> str:
     return " ".join(label.split()).casefold()
 
 
-def delimiter_can_open(text: str, start: int, marker: str, length: int) -> bool:
-    left, right = delimiter_flanking(text, start, length)
-    if marker == "_":
-        previous = text[start - 1] if start > 0 else "\n"
-        return left and (not right or is_punctuation(previous))
-    return left
-
-
-def delimiter_can_close(text: str, start: int, marker: str, length: int) -> bool:
-    left, right = delimiter_flanking(text, start, length)
-    if marker == "_":
-        next_char = text[start + length] if start + length < len(text) else "\n"
-        return right and (not left or is_punctuation(next_char))
-    return right
-
-
-def delimiter_flanking(text: str, start: int, length: int) -> tuple[bool, bool]:
-    previous = text[start - 1] if start > 0 else "\n"
-    next_char = text[start + length] if start + length < len(text) else "\n"
-    left = not next_char.isspace() and (
-        not is_punctuation(next_char) or previous.isspace() or is_punctuation(previous)
-    )
-    right = not previous.isspace() and (
-        not is_punctuation(previous) or next_char.isspace() or is_punctuation(next_char)
-    )
-    return left, right
-
-
-def is_punctuation(char: str) -> bool:
-    return not char.isalnum() and not char.isspace()
-
-
 def reference_node(payload: str, origin: SourceSpan) -> FootnoteRef | Citation:
     calls = parse_mos(payload, context="reference", filename=origin.filename)
     if len(calls) == 1 and calls[0].head == "cite":
@@ -417,4 +380,3 @@ def reference_node(payload: str, origin: SourceSpan) -> FootnoteRef | Citation:
     if is_footnote_label(payload.strip()):
         return FootnoteRef(payload.strip(), origin)
     raise MarkTeXError(f"unsupported reference payload: {payload}", origin)
-

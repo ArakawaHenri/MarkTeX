@@ -15,7 +15,7 @@ model; a backend is one possible lowering target.
 
 ## 1. Design Laws
 
-1. MarkTeX owns its surface language. It includes Markdown-derived spellings,
+1. MarkTeX owns its surface language. It includes Markdown-inspired spellings,
    but those spellings are MarkTeX syntax, not delegated Markdown
    compatibility.
 2. `.mtx` is a script-shaped document. With host execution enabled, source
@@ -71,10 +71,10 @@ not a global function.
 | `PAGE.CURRENT` and `PAGE.TOTAL` placeholders | Supported inline and in `$` code fences |
 | Complex symbolic inline expressions | Diagnostic in LuaLaTeX backend |
 | Headings and paragraphs | Supported |
-| Markdown-derived MarkTeX fallback syntax | Supported practical subset |
+| Markdown-inspired MarkTeX fallback syntax | Supported practical subset |
 | Ordinary and `$`-interpolated code fences | Supported subset |
 | Rich `+++` tables | Supported |
-| Pipe tables with Markdown-style spelling | Supported fallback syntax |
+| Pipe tables with familiar pipe spelling | Supported fallback syntax |
 | Footnotes | Supported single-line definitions |
 | Explicit citation references | Supported through citation styles |
 | Bibliography backend | Supported BibTeX subset with `.mtxcs`/`.mtxbs` styles |
@@ -655,7 +655,7 @@ is valid 0.1 directionally, but unsupported by the 0.1 LuaLaTeX backend.
 
 ## 11. MarkTeX Fallback Syntax
 
-0.1 supports practical Markdown-derived spellings as MarkTeX fallback syntax.
+0.1 supports practical Markdown-inspired spellings as MarkTeX fallback syntax.
 This is not a public Markdown adapter layer and it is not a direct promise of
 Markdown dialect compatibility: MarkTeX controls are recognized first, then
 unclaimed text chunks are parsed and converted directly to MarkTeX AST.
@@ -663,7 +663,7 @@ unclaimed text chunks are parsed and converted directly to MarkTeX AST.
 - ATX headings `#` through `######`;
 - setext headings;
 - paragraphs separated by blank lines;
-- fenced and indented code blocks;
+- fenced code blocks;
 - unordered, ordered, nested, loose, and tight lists;
 - task list markers `- [ ]` and `- [x]`;
 - block quotes;
@@ -688,16 +688,32 @@ Not supported in 0.1:
 - autolink semantics such as `<https://example.com>`;
 - raw/block/inline HTML semantics;
 - HTML entity decoding as HTML behavior;
-- full CommonMark conformance.
+- CommonMark whitespace, indentation, softbreak, or HTML behavior.
 
 Autolinks and raw HTML remain escaped document text. Unsupported
-Markdown-derived spelling usually remains paragraph text unless it collides
+Markdown-inspired spelling usually remains paragraph text unless it collides
 with a recognized MarkTeX form that has to be diagnosed.
+
+Fallback block syntax uses a control-sequence consumption model: each form
+consumes only its explicit control prefix, and every character after that
+prefix is document content. Fallback control prefixes are recognized only at
+the current container column; MarkTeX does not inherit Markdown's `0..3`
+leading-space tolerance. For example, `- x` consumes the list opener `- ` and
+uses `x` as content, while `-  x` keeps one leading content space. `# Title`
+is a heading, but ` # Title` and `#Title` are ordinary paragraph text.
 
 A physical newline inside a paragraph is a MarkTeX hard line break. A backslash
 immediately followed by a physical newline is line continuation and contributes
 nothing. This intentionally differs from Markdown's soft/hard break rules:
 spaces are ordinary text characters in MarkTeX.
+
+Lists derive their nesting unit from the current contiguous nonblank list run.
+The first item must start at the current container column. If nested items
+exist, MarkTeX uses the greatest common divisor of positive opener indents as
+the indent unit. Blank lines end the current list run. Tabs and spaces cannot
+be mixed in structural indentation, and nesting cannot skip levels. Ordered
+list markers in the same ordered block must be sequential; switching between
+ordered and unordered at the same level creates a sibling list block.
 
 Inline MarkTeX delimiter forms are physical-line local. `[$ ... ]` host
 expressions and `$...$` inline math must open and close on the same physical
@@ -705,6 +721,8 @@ line. A failed form is ordinary text; line continuation in that ordinary text
 does not trigger a second inline parse pass. Therefore `[$ x\` followed by
 `y ]` and `$x\` followed by `y$` are text, not expressions or math. Inside
 math, the body is raw target math text and MarkTeX inline parsing is inactive.
+Inline code, emphasis, strong, and strikethrough delimiters are mechanical
+same-line pairs; unclosed or cross-line pairs remain text.
 
 Display math uses column-one fence lines:
 
@@ -757,6 +775,10 @@ Only a `$` prefix enables code interpolation. An info string such as
 Both top-level backtick fences and fallback fences report `unclosed code fence`
 when the closing fence is missing.
 
+Indented code blocks are not MarkTeX syntax. Leading spaces at the current
+container column are ordinary paragraph text; fenced code is the canonical code
+block form.
+
 ## 13. Rich Tables
 
 Rich table syntax:
@@ -786,12 +808,16 @@ The 0.1 LuaLaTeX backend emits a simple `tabular`. Column MOS alignment lowers
 to `l`, `c`, or `r` when the column spec provides `align=left|center|right`.
 Unknown alignment values are diagnostics; omitted alignment defaults to `left`.
 
-Pipe tables use Markdown-style spelling as MarkTeX fallback syntax and lower
-to the same `Table` core object. Their alignment row is converted into
-table-column metadata before backend lowering. Header and body rows must have
-exactly the same number of cells as the alignment row; MarkTeX does not
-silently pad or truncate pipe table rows. Pipe tables are not rich table
-syntax, even though both become the same core `Table` object.
+Pipe tables use familiar pipe spelling as MarkTeX fallback syntax and lower to
+the same `Table` core object. Rows must start and end with `|`. A cell consumes
+at most one delimiter-adjacent ASCII padding space on each side: `| x |`
+contains `x`, while `|  x  |` contains ` x `. Only `\|` is interpreted by the
+table splitter as a literal pipe; other backslash escapes are left for the
+inline parser. The alignment row is converted into table-column metadata
+before backend lowering. Header and body rows must have exactly the same
+number of cells as the alignment row; MarkTeX does not silently pad or
+truncate pipe table rows. Pipe tables are not rich table syntax, even though
+both become the same core `Table` object.
 
 ## 14. References, Footnotes, And Citations
 
@@ -827,10 +853,10 @@ positional args become citation keys, and raw kwargs become citation options.
 The backend resolves each key against active BibTeX resources and renders the
 in-text citation through the active `.mtxcs` citation style.
 
-MarkTeX footnotes using Markdown-style spelling and bibliography citations are
+MarkTeX footnotes using familiar bracket spelling and bibliography citations are
 deliberately separate:
 
-- `[^note]` always lowers as a MarkTeX footnote using Markdown-style spelling;
+- `[^note]` always lowers as a MarkTeX footnote using familiar bracket spelling;
 - `[^ cite: Key ]` always lowers through the active citation style, even when
   that style is footnote-based.
 
@@ -1047,8 +1073,8 @@ Lowering support:
 The `tight` flag on list AST nodes is preserved, but the 0.1 LuaLaTeX backend
 maps tight and loose lists to the same `itemize` / `enumerate` spacing. Ordered
 list starts lower by setting the active LaTeX enumerate counter
-(`enumi`, `enumii`, `enumiii`, or `enumiv`). Ordered list nesting deeper than
-LaTeX's four native enumerate levels is a backend diagnostic.
+(`enumi`, `enumii`, `enumiii`, or `enumiv`). List nesting deeper than LaTeX's
+four native list levels is a backend diagnostic.
 
 Unsupported backend objects must raise diagnostics. They must not be silently
 dropped and must not be emitted as raw TeX by convenience fallback.
@@ -1236,7 +1262,7 @@ lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-
   EIR, backend IR, and target output.
 - Implement schema-driven MOS value shading.
 - Support headings, paragraphs, code fences, lists, block quotes, thematic
-  breaks, rich tables, pipe tables, practical inline Markdown-derived MarkTeX
+  breaks, rich tables, pipe tables, practical inline Markdown-inspired MarkTeX
   syntax, inline/display math, footnotes, citation placeholders, simple
   conditionals, and page placeholders.
 - Add `--no-host` and JSON diagnostics.
@@ -1246,8 +1272,8 @@ lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-
 Planned work after 0.1:
 
 - external additive schema loading;
-- hardening rare CommonMark delimiter and container edge cases in the private
-  fallback parser;
+- hardening rare MarkTeX fallback delimiter and container edge cases in the
+  private fallback parser;
 - backend lowering for scope-driven typography;
 - fuller APA/MLA/Chicago bibliography rule coverage;
 - symbolic inline arithmetic such as `PAGE.TOTAL - PAGE.CURRENT`;

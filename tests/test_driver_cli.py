@@ -756,7 +756,7 @@ class DriverTests(unittest.TestCase):
         build = build_document("Logo ![MarkTeX](logo.png).\n", filename="test.mtx")
         self.assertIn(r"\includegraphics{logo.png}", build.target_text)
 
-    def test_markdown_derived_marktex_block_shapes_lower(self) -> None:
+    def test_marktex_fallback_block_shapes_lower(self) -> None:
         build = build_document(
             "Setext Title\n"
             "============\n\n"
@@ -779,6 +779,50 @@ class DriverTests(unittest.TestCase):
         self.assertIn(r"\sout{strike}", build.target_text)
         self.assertIn(r"\usepackage[normalem]{ulem}", build.target_text)
         self.assertIn(r"\rule{\linewidth}{0.4pt}", build.target_text)
+
+    def test_list_control_sequence_preserves_extra_content_space(self) -> None:
+        build = build_document("- x\n-  y\n- \n-\n", filename="test.mtx")
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual(blocks[0]["kind"], "list")
+        items = blocks[0]["items"]
+        self.assertEqual(items[0]["children"][0]["children"][0]["value"], "x")
+        self.assertEqual(items[1]["children"][0]["children"][0]["value"], " y")
+        self.assertEqual(items[2]["children"], [])
+        self.assertEqual(blocks[1]["children"][0]["value"], "-")
+
+    def test_list_indent_unit_is_derived_by_gcd(self) -> None:
+        two_spaces = build_document("- parent\n  - child\n", filename="test.mtx")
+        three_spaces = build_document("- parent\n   - child\n", filename="test.mtx")
+        four_spaces = build_document("- parent\n    - child\n", filename="test.mtx")
+        for build in (two_spaces, three_spaces, four_spaces):
+            outer = build.document.to_json()["blocks"][0]
+            self.assertEqual(outer["items"][0]["children"][1]["kind"], "list")
+            self.assertIn(r"\begin{itemize}", build.target_text)
+
+    def test_list_indent_cannot_skip_levels(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "list nesting cannot skip levels"):
+            build_document("- parent\n  - child\n      - grandchild\n", filename="test.mtx")
+
+    def test_invalid_list_continuation_is_not_consumed(self) -> None:
+        build = build_document("- item\n continuation\n  - not nested\n", filename="test.mtx")
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual([block["kind"] for block in blocks], ["list", "paragraph", "paragraph"])
+        self.assertEqual(blocks[1]["children"][0]["value"], " continuation")
+        self.assertEqual(blocks[2]["children"][0]["value"], "  - not nested")
+
+    def test_list_indent_cannot_mix_tabs_and_spaces(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "list indentation cannot mix tabs and spaces"):
+            build_document("- parent\n \t- child\n", filename="test.mtx")
+
+    def test_same_ordered_block_requires_sequential_markers(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "ordered list marker must be 2"):
+            build_document("1. first\n3. third\n", filename="test.mtx")
+
+    def test_task_control_sequence_preserves_extra_content_space(self) -> None:
+        build = build_document("- [x]  done\n- [ ]  todo\n", filename="test.mtx")
+        items = build.document.to_json()["blocks"][0]["items"]
+        self.assertEqual(items[0]["children"][0]["children"][0]["value"], " done")
+        self.assertEqual(items[1]["children"][0]["children"][0]["value"], " todo")
 
     def test_nested_ordered_list_uses_matching_latex_counter(self) -> None:
         build = build_document(
@@ -836,6 +880,19 @@ class DriverTests(unittest.TestCase):
             build_document("| A | B |\n| - | - |\n| only |\n", filename="test.mtx")
         with self.assertRaisesRegex(MarkTeXError, r"pipe table row has 3 cells; expected 2"):
             build_document("| A | B |\n| - | - |\n| one | two | three |\n", filename="test.mtx")
+
+    def test_pipe_table_consumes_one_padding_space_only(self) -> None:
+        build = build_document("| A |\n| --- |\n| x |\n|  y  |\n", filename="test.mtx")
+        table = build.document.to_json()["blocks"][0]
+        self.assertEqual(table["rows"][0][0][0]["value"], "x")
+        self.assertEqual(table["rows"][1][0][0]["value"], " y ")
+
+    def test_pipe_table_only_escapes_literal_pipe_during_split(self) -> None:
+        build = build_document("| A |\n| --- |\n| a\\|b |\n| \\*literal\\* |\n", filename="test.mtx")
+        rows = build.document.to_json()["blocks"][0]["rows"]
+        self.assertEqual(rows[0][0][0]["value"], "a|b")
+        self.assertEqual([node["value"] for node in rows[1][0]], ["*", "literal", "*"])
+        self.assertIn("*literal*", build.target_text)
 
     def test_fallback_fenced_code_unclosed_fails(self) -> None:
         with self.assertRaisesRegex(MarkTeXError, "unclosed code fence"):
@@ -1410,16 +1467,53 @@ class FallbackSyntaxTests(unittest.TestCase):
         self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
         self.assertIn(r"code\ block", build.target_text)
 
-    def test_indented_code_block_lowers(self) -> None:
+    def test_indented_code_is_plain_paragraph_text(self) -> None:
         build = build_document("    indented code\n", filename="test.mtx")
-        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
-        self.assertIn(r"indented\ code", build.target_text)
+        self.assertEqual(build.document.to_json()["blocks"][0]["kind"], "paragraph")
+        self.assertEqual(build.document.to_json()["blocks"][0]["children"][0]["value"], "    indented code")
+        self.assertNotIn(r"\par\begingroup\ttfamily", build.target_text)
 
     def test_blockquote_lowers(self) -> None:
         build = build_document("> Quoted text\n", filename="test.mtx")
         self.assertIn(r"\begin{quote}", build.target_text)
         self.assertIn("Quoted text", build.target_text)
         self.assertIn(r"\end{quote}", build.target_text)
+
+    def test_blockquote_control_sequence_is_exact(self) -> None:
+        build = build_document(" > not quote\n>x\n>\n", filename="test.mtx")
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual(blocks[0]["kind"], "paragraph")
+        self.assertEqual(
+            [child.get("value") for child in blocks[0]["children"] if child["kind"] == "text"],
+            [" > not quote", ">x"],
+        )
+        self.assertEqual(blocks[1]["kind"], "blockquote")
+        self.assertEqual(blocks[1]["children"], [])
+
+    def test_fallback_controls_are_current_column_exact(self) -> None:
+        build = build_document(" # Heading\n  ```\nnot code\n  ```\n - item\n- item\n", filename="test.mtx")
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual(blocks[0]["kind"], "paragraph")
+        self.assertEqual(blocks[1]["kind"], "paragraph")
+        self.assertEqual(blocks[1]["children"][0]["value"], " - item")
+        self.assertEqual(blocks[2]["kind"], "list")
+        self.assertIn(r" \# Heading", build.target_text)
+        self.assertNotIn(r"\section{Heading}", build.target_text)
+        self.assertNotIn(r"\par\begingroup\ttfamily", build.target_text)
+
+    def test_atx_heading_consumes_only_control_space(self) -> None:
+        build = build_document("#  Title ###\n#Title\n", filename="test.mtx")
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual(blocks[0]["kind"], "heading")
+        self.assertEqual(blocks[0]["children"][0]["value"], " Title ###")
+        self.assertEqual(blocks[1]["kind"], "paragraph")
+        self.assertEqual(blocks[1]["children"][0]["value"], "#Title")
+
+    def test_thematic_break_is_exact(self) -> None:
+        exact = build_document("---\n", filename="test.mtx")
+        spaced = build_document("-- -\n", filename="test.mtx")
+        self.assertEqual(exact.document.to_json()["blocks"][0]["kind"], "thematic_break")
+        self.assertEqual(spaced.document.to_json()["blocks"][0]["kind"], "paragraph")
 
     def test_checked_task_list_item_lowers(self) -> None:
         build = build_document("- [x] Done item\n", filename="test.mtx")
@@ -1497,6 +1591,19 @@ class InlineParserTests(unittest.TestCase):
         # A code span with a leading and trailing space and non-blank interior
         build = build_document("`` ` code ` ``\n", filename="test.mtx")
         self.assertIn(r"\texttt{` code `}", build.target_text)
+
+    def test_code_span_is_physical_line_local(self) -> None:
+        build = build_document("`a\nb`\n", filename="test.mtx")
+        self.assertNotIn(r"\texttt{a b}", build.target_text)
+        self.assertIn("`a", build.target_text)
+        self.assertIn("b`", build.target_text)
+
+    def test_formatting_delimiters_are_mechanical_and_line_local(self) -> None:
+        build = build_document("a_b_c\n*a\nb*\n~~a\nb~~\n", filename="test.mtx")
+        paragraph = build.document.to_json()["blocks"][0]
+        self.assertEqual(paragraph["children"][1]["kind"], "emphasis")
+        self.assertNotIn(r"\emph{a\\b}", build.target_text)
+        self.assertNotIn(r"\sout{a\\b}", build.target_text)
 
     def test_reference_style_link_resolves(self) -> None:
         build = build_document(

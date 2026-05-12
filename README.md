@@ -2,13 +2,13 @@
 
 # MarkTeX
 
-MarkTeX is a programmable document language with Markdown-derived surface
+MarkTeX is a programmable document language with Markdown-inspired surface
 spellings. LuaLaTeX-oriented `.tex` output is the current backend target, not
 the language definition.
 
 The current package milestone is `0.1`: installable Python package, `mtxc` CLI,
 MOS call syntax, Python host runtime, self-contained pipeline artifacts, a
-private MarkTeX fallback parser for Markdown-derived spellings, a BibTeX-backed
+private MarkTeX fallback parser for Markdown-inspired spellings, a BibTeX-backed
 citation style layer, MarkTeX-owned inline/display math syntax, and a thin
 LuaLaTeX backend. `mtxc` does not run LuaLaTeX and does not build PDFs.
 

@@ -91,6 +91,11 @@ Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
 - [ ] Unchecked task item.
   - Nested bullet with a [reference link][project].
 
+-  Leading content space is preserved after the list opener.
+
+- GCD-derived list indent parent.
+   - Three-space nested item.
+
 > Block quote content remains ordinary MarkTeX inline content, including
 > *emphasis* and page placeholder [$ PAGE.CURRENT ].
 
@@ -98,6 +103,7 @@ Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
 | :--- | :----: | ----: |
 | pipe table | **strong** | footnote[^pipe-note] |
 | image | ![Logo](assets/logo.pdf) | `code` |
+|  padded  | \*literal\* | a\|b |
 
 ---
 
