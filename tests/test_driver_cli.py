@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import contextvars
 import inspect
-import os
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -1802,6 +1803,26 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertEqual(len(drained), 1)
         self.assertEqual(len(runtime.finish()), 0)
         runtime.reset()
+
+    def test_module_level_session_is_context_local(self) -> None:
+        runtime.reset()
+        runtime.invoke(runtime.document_patch("layout"))
+
+        other_context = contextvars.Context()
+
+        def seed_other_context() -> int:
+            runtime.invoke(runtime.document_patch("margin"))
+            return len(runtime.finish())
+
+        self.assertEqual(other_context.run(seed_other_context), 1)
+        self.assertEqual(len(runtime.finish()), 1)
+
+        runtime.reset()
+        self.assertEqual(len(runtime.finish()), 0)
+        self.assertEqual(other_context.run(lambda: len(runtime.finish())), 1)
+
+        other_context.run(runtime.reset)
+        self.assertEqual(other_context.run(lambda: len(runtime.finish())), 0)
 
 
 class SerdeRoundTripTests(unittest.TestCase):

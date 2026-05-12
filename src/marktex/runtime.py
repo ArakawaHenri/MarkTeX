@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from marktex.core import (
@@ -148,27 +149,38 @@ def value_to_mos(value: object) -> MosValue:
     return RawString(str(value))
 
 
-_DEFAULT_SESSION = RuntimeSession()
+_CURRENT_SESSION: ContextVar[RuntimeSession | None] = ContextVar(
+    "marktex_runtime_session",
+    default=None,
+)
+
+
+def current_session() -> RuntimeSession:
+    session = _CURRENT_SESSION.get()
+    if session is None:
+        session = RuntimeSession()
+        _CURRENT_SESSION.set(session)
+    return session
 
 
 def invoke(obj: object) -> object:
-    return _DEFAULT_SESSION.invoke(obj)
+    return current_session().invoke(obj)
 
 
 def raw(text: object, *, force_raw: bool = False) -> RawString:
-    return _DEFAULT_SESSION.raw(text, force_raw=force_raw)
+    return current_session().raw(text, force_raw=force_raw)
 
 
 def tuple_value(*items: object) -> TupleValue:
-    return _DEFAULT_SESSION.tuple_value(*items)
+    return current_session().tuple_value(*items)
 
 
 def call(head: str, *args: object, context: str = "document", **kwargs: object) -> CallUnit:
-    return _DEFAULT_SESSION.call(head, *args, context=context, **kwargs)
+    return current_session().call(head, *args, context=context, **kwargs)
 
 
 def document_patch(head: str, *args: object, **kwargs: object) -> DocumentPatch:
-    return _DEFAULT_SESSION.document_patch(head, *args, **kwargs)
+    return current_session().document_patch(head, *args, **kwargs)
 
 
 def scope_push(
@@ -177,23 +189,25 @@ def scope_push(
     scope: str = DEFAULT_SCOPE_TARGET,
     **kwargs: object,
 ) -> ScopePush:
-    return _DEFAULT_SESSION.scope_push(key, *args, scope=scope, **kwargs)
+    return current_session().scope_push(key, *args, scope=scope, **kwargs)
 
 
 def scope_close(key: str = "") -> ScopeClose:
-    return _DEFAULT_SESSION.scope_close(key)
+    return current_session().scope_close(key)
 
 
 def drain() -> tuple[RuntimeEvent, ...]:
-    return _DEFAULT_SESSION.drain()
+    return current_session().drain()
 
 
 def reset() -> None:
-    _DEFAULT_SESSION.reset()
+    session = _CURRENT_SESSION.get()
+    if session is not None:
+        session.reset()
 
 
 def finish() -> list[RuntimeEvent]:
-    return _DEFAULT_SESSION.finish()
+    return current_session().finish()
 
 
 def document(
@@ -366,7 +380,7 @@ def document_from_surface_artifact(
 
 
 def document_from_ast_artifact(artifact: dict[str, object]) -> Document:
-    from marktex.driver.compiler import ArtifactKind, artifact_payload_from_object
+    from marktex.driver.artifacts import ArtifactKind, artifact_payload_from_object
     from marktex.driver.serde import document_from_json
 
     payload = artifact_payload_from_object(artifact, expected_kind=ArtifactKind.AST)
