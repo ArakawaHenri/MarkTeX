@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from marktex.source import MarkTeXError, SourceSpan
+from marktex.source import MarkTeXError, SourceSpan, span_from_range
 from marktex.surface.model import (
     BlockQuoteNode,
     CodeFenceNode,
@@ -601,14 +601,7 @@ def join_paragraph_lines(lines: list[FallbackLine]) -> tuple[str, tuple[int, ...
 def span_from_lines(filename: str, lines: list[FallbackLine], source: str) -> SourceSpan:
     if not lines:
         return SourceSpan(filename, 0, 0)
-    return span(filename, lines[0].start, lines[-1].end, source)
-
-
-def span(filename: str, start: int, end: int, source: str) -> SourceSpan:
-    line = source.count("\n", 0, start) + 1
-    last_newline = source.rfind("\n", 0, start)
-    column = start + 1 if last_newline == -1 else start - last_newline
-    return SourceSpan(filename, start, end, line, column)
+    return span_from_range(filename, lines[0].start, lines[-1].end, source)
 
 
 def indentation(text: str) -> int:

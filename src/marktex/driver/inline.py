@@ -19,7 +19,7 @@ from marktex.core import (
 from marktex.host.python import PythonHost
 from marktex.mos import RawString, parse_mos
 from marktex.semantics import CITATION_KWARGS
-from marktex.source import MarkTeXError, SourceSpan
+from marktex.source import MarkTeXError, SourceSpan, span_from_range
 from marktex.surface.grammar import is_footnote_label
 
 
@@ -337,7 +337,7 @@ class _InlineParser:
             nodes.append(Text(value, self.token_span(start, end)))
 
     def token_span(self, start: int, end: int) -> SourceSpan:
-        return absolute_span(
+        return span_from_range(
             self.origin.filename,
             self.source_offsets[start],
             self.source_offsets[end],
@@ -418,9 +418,3 @@ def reference_node(payload: str, origin: SourceSpan) -> FootnoteRef | Citation:
         return FootnoteRef(payload.strip(), origin)
     raise MarkTeXError(f"unsupported reference payload: {payload}", origin)
 
-
-def absolute_span(filename: str, start: int, end: int, source: str) -> SourceSpan:
-    line = source.count("\n", 0, start) + 1
-    last_newline = source.rfind("\n", 0, start)
-    column = start + 1 if last_newline == -1 else start - last_newline
-    return SourceSpan(filename, start, end, line, column)

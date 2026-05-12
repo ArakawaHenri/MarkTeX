@@ -47,7 +47,7 @@ from marktex.semantics import (
     page_setup_from_layout,
     plan_document_directive_call,
 )
-from marktex.source import MarkTeXError, SourceSpan
+from marktex.source import MarkTeXError, SourceSpan, offset_span, remap_span_to_offsets, span_from_offsets
 from marktex.state import StateEngine
 from marktex.surface import (
     BlockQuoteNode,
@@ -627,7 +627,7 @@ def remap_call_origin(
         call,
         args=args,
         kwargs=kwargs,
-        origin=remap_origin(call.origin, offsets, filename, source),
+        origin=remap_span_to_offsets(call.origin, offsets, filename, source),
     )
 
 
@@ -638,41 +638,11 @@ def remap_mos_value_origin(
     source: str,
 ) -> MosValue:
     if isinstance(value, RawString):
-        return replace(value, origin=remap_origin(value.origin, offsets, filename, source))
+        return replace(value, origin=remap_span_to_offsets(value.origin, offsets, filename, source))
     if isinstance(value, TupleValue):
         return replace(
             value,
             items=tuple(remap_mos_value_origin(item, offsets, filename, source) for item in value.items),
-            origin=remap_origin(value.origin, offsets, filename, source),
+            origin=remap_span_to_offsets(value.origin, offsets, filename, source),
         )
     return remap_call_origin(value, offsets, filename, source)
-
-
-def remap_origin(
-    origin: SourceSpan | None,
-    offsets: tuple[int, ...],
-    filename: str,
-    source: str,
-) -> SourceSpan | None:
-    if origin is None:
-        return None
-    start_index = min(max(origin.start, 0), len(offsets) - 1)
-    end_index = min(max(origin.end, 0), len(offsets) - 1)
-    return absolute_span(filename, offsets[start_index], offsets[end_index], source)
-
-
-def span_from_offsets(filename: str, offsets: tuple[int, ...], source: str) -> SourceSpan:
-    return absolute_span(filename, offsets[0], offsets[-1], source)
-
-
-def absolute_span(filename: str, start: int, end: int, source: str) -> SourceSpan:
-    line = source.count("\n", 0, start) + 1
-    last_newline = source.rfind("\n", 0, start)
-    column = start + 1 if last_newline == -1 else start - last_newline
-    return SourceSpan(filename, start, end, line, column)
-
-
-def offset_span(origin: SourceSpan, start_delta: int, end_delta: int, source: str) -> SourceSpan:
-    start = origin.start + start_delta
-    end = origin.start + end_delta
-    return absolute_span(origin.filename, start, end, source)

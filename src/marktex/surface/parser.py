@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from marktex.source import MarkTeXError, SourceSpan
+from marktex.source import MarkTeXError, SourceSpan, span_from_range
 from marktex.surface.fallback import FallbackLine, parse_fallback_lines
 from marktex.surface.grammar import FOOTNOTE_DEFINITION_RE
 from marktex.surface.model import (
@@ -410,8 +410,4 @@ def strip_cell_offsets(text: str, offsets: tuple[int, ...]) -> tuple[str, tuple[
     return text[start:end], offsets[start : end + 1]
 
 
-def span(filename: str, start: int, end: int, source: str) -> SourceSpan:
-    line = source.count("\n", 0, start) + 1
-    last_newline = source.rfind("\n", 0, start)
-    column = start + 1 if last_newline == -1 else start - last_newline
-    return SourceSpan(filename, start, end, line, column)
+span = span_from_range
