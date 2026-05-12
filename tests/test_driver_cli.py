@@ -527,6 +527,37 @@ class DriverTests(unittest.TestCase):
         self.assertEqual([block["kind"] for block in conditional["branches"][0]["body"]], ["page_setup", "paragraph"])
         self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm}", build.target_text)
 
+    def test_root_conditional_flushes_pending_page_setup(self) -> None:
+        build = build_document(
+            "First\n"
+            "!# layout: A5\n"
+            "!? [$ True ]\n"
+            "Second\n"
+            "!!?\n",
+            filename="test.mtx",
+        )
+        self.assertEqual(
+            [block.to_json()["kind"] for block in build.document.blocks],
+            ["paragraph", "page_setup", "conditional"],
+        )
+        self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm}", build.target_text)
+
+    def test_root_conditional_counts_as_content_before_later_page_setup(self) -> None:
+        build = build_document(
+            "!? [$ True ]\n"
+            "First\n"
+            "!!?\n"
+            "!# layout: A5\n"
+            "Second\n",
+            filename="test.mtx",
+        )
+        self.assertEqual(
+            [block.to_json()["kind"] for block in build.document.blocks],
+            ["conditional", "page_setup", "paragraph"],
+        )
+        self.assertEqual(build.document.events, ())
+        self.assertIn(r"\newgeometry{paperwidth=148mm,paperheight=210mm}", build.target_text)
+
     def test_branch_newpage_is_kept_even_without_following_content(self) -> None:
         build = build_document("!? [$ True ]\n!# newpage\n!!?\n", filename="test.mtx")
         conditional = build.document.blocks[0].to_json()
@@ -536,6 +567,21 @@ class DriverTests(unittest.TestCase):
     def test_state_document_directives_inside_branch_are_diagnostics(self) -> None:
         with self.assertRaisesRegex(MarkTeXError, "document directive 'bibstyle' is not supported"):
             build_document("!? [$ True ]\n!# bibstyle: numeric\n!!?\n", filename="test.mtx")
+
+    def test_root_only_nodes_inside_branch_are_diagnostics(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "host blocks are only supported at document root"):
+            build_document(
+                "!? [$ True ]\n"
+                "$$$python\n"
+                "value = 1\n"
+                "$$$\n"
+                "!!?\n",
+                filename="test.mtx",
+            )
+        with self.assertRaisesRegex(MarkTeXError, "scope directives are only supported at document root"):
+            build_document("!? [$ True ]\n!@ w\n!!?\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "footnote definitions are only supported at document root"):
+            build_document("!? [$ True ]\n[^note]: Branch note.\n!!?\n", filename="test.mtx")
 
     def test_branch_page_setup_inherits_current_layout(self) -> None:
         build = build_document(
@@ -746,7 +792,7 @@ class DriverTests(unittest.TestCase):
     def test_ordered_list_beyond_lualatex_native_depth_fails(self) -> None:
         with self.assertRaisesRegex(
             MarkTeXError,
-            "ordered list nesting deeper than LuaLaTeX backend supports",
+            "list nesting deeper than LuaLaTeX backend supports",
         ):
             build_document(
                 "1. a\n"
@@ -754,6 +800,20 @@ class DriverTests(unittest.TestCase):
                 "      1. c\n"
                 "         1. d\n"
                 "            1. e\n",
+                filename="test.mtx",
+            )
+
+    def test_unordered_list_beyond_lualatex_native_depth_fails(self) -> None:
+        with self.assertRaisesRegex(
+            MarkTeXError,
+            "list nesting deeper than LuaLaTeX backend supports",
+        ):
+            build_document(
+                "- a\n"
+                "  - b\n"
+                "    - c\n"
+                "      - d\n"
+                "        - e\n",
                 filename="test.mtx",
             )
 

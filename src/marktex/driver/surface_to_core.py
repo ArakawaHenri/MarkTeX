@@ -170,11 +170,7 @@ def document_from_surface_payload(
         content_started = True
 
     def append_pending_surface_node(node: object) -> None:
-        frame = conditional_stack[-1]
-        if frame.else_body is not None:
-            frame.else_body.append(node)
-        else:
-            frame.current_body.append(node)
+        append_to_conditional_frame(conditional_stack[-1], node)
 
     for node in surface.nodes:
         if conditional_stack and not isinstance(node, ConditionalNode):
@@ -225,7 +221,16 @@ def document_from_surface_payload(
                 )
             )
         elif isinstance(node, ConditionalNode):
-            handle_conditional_node(node, host, conditional_stack, blocks, builder, root_link_refs, page_layout)
+            conditional = handle_conditional_node(
+                node,
+                host,
+                conditional_stack,
+                builder,
+                root_link_refs,
+                page_layout,
+            )
+            if conditional is not None:
+                append_block(conditional)
         else:
             if conditional_stack:
                 frame = conditional_stack[-1]
@@ -361,6 +366,12 @@ class _SurfaceCoreBuilder:
                 append(ThematicBreak(node.origin))
             elif isinstance(node, LinkReferenceDefinitionNode):
                 continue
+            elif isinstance(node, HostBlockNode):
+                raise MarkTeXError("host blocks are only supported at document root", node.origin)
+            elif isinstance(node, ScopeOpenNode | ScopeCloseNode):
+                raise MarkTeXError("scope directives are only supported at document root", node.origin)
+            elif isinstance(node, FootnoteDefinitionNode):
+                raise MarkTeXError("footnote definitions are only supported at document root", node.origin)
             elif isinstance(node, ConditionalNode):
                 raise MarkTeXError("conditional blocks are not supported inside fallback containers", node.origin)
             else:
@@ -477,21 +488,27 @@ def direct_link_references(nodes: tuple[object, ...]) -> dict[str, str]:
     return references
 
 
+def append_to_conditional_frame(frame: _ConditionalFrame, node: object) -> None:
+    if frame.else_body is not None:
+        frame.else_body.append(node)
+    else:
+        frame.current_body.append(node)
+
+
 def handle_conditional_node(
     node: ConditionalNode,
     host: PythonHost,
     stack: list[_ConditionalFrame],
-    root_blocks: list[Block],
     builder: _SurfaceCoreBuilder,
     root_link_refs: dict[str, str],
     page_layout: PageLayout,
-) -> None:
+) -> Conditional | None:
     if node.marker == "!?":
         frame = _ConditionalFrame(node.origin)
         frame.current_condition = eval_condition_payload(node.payload, host, node.origin)
         frame.current_origin = node.origin
         stack.append(frame)
-        return
+        return None
     if not stack:
         raise MarkTeXError("conditional branch without active conditional", node.origin)
     frame = stack[-1]
@@ -501,7 +518,7 @@ def handle_conditional_node(
         frame.push_branch()
         frame.current_condition = eval_condition_payload(node.payload, host, node.origin)
         frame.current_origin = node.origin
-        return
+        return None
     if node.marker == "!?!":
         if frame.else_body is not None:
             raise MarkTeXError("duplicate else branch in conditional", node.origin)
@@ -509,20 +526,15 @@ def handle_conditional_node(
         frame.current_condition = None
         frame.current_origin = None
         frame.else_body = []
-        return
+        return None
     if node.marker == "!!?":
         frame.push_branch()
         stack.pop()
         conditional = conditional_from_surface_frame(frame, builder, root_link_refs, page_layout)
         if stack:
-            parent = stack[-1]
-            if parent.else_body is not None:
-                parent.else_body.append(conditional)
-            else:
-                parent.current_body.append(conditional)
-        else:
-            root_blocks.append(conditional)
-        return
+            append_to_conditional_frame(stack[-1], conditional)
+            return None
+        return conditional
     raise MarkTeXError(f"unknown conditional marker: {node.marker}", node.origin)
 
 

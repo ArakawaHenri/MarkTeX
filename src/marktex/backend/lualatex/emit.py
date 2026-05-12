@@ -45,6 +45,7 @@ from marktex.source import MarkTeXError, SourceSpan
 
 
 ENUMERATE_COUNTERS = ("enumi", "enumii", "enumiii", "enumiv")
+LATEX_LIST_DEPTH_LIMIT = len(ENUMERATE_COUNTERS)
 
 
 def make_backend_ir(document: Document) -> dict[str, object]:
@@ -235,9 +236,9 @@ class LuaLaTeXEmitter:
         )
 
     def emit_list(self, block: ListBlock, *, depth: int) -> list[str]:
-        if block.ordered and depth >= len(ENUMERATE_COUNTERS):
+        if depth >= LATEX_LIST_DEPTH_LIMIT:
             raise MarkTeXError(
-                "ordered list nesting deeper than LuaLaTeX backend supports",
+                "list nesting deeper than LuaLaTeX backend supports",
                 block.origin,
             )
         environment = "enumerate" if block.ordered else "itemize"
