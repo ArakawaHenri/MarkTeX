@@ -1703,6 +1703,17 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertIsInstance(result, TupleValue)
         self.assertEqual(len(result.items), 2)
 
+    def test_object_to_json_serializes_mos_values(self) -> None:
+        from marktex.core import object_to_json
+        from marktex.mos import CallUnit, RawString, TupleValue
+
+        raw = RawString("A4")
+        tuple_value = TupleValue((raw,))
+        call = CallUnit("document", "layout", args=(raw,), kwargs={"paper": tuple_value})
+        self.assertEqual(object_to_json(raw), raw.to_json())
+        self.assertEqual(object_to_json(tuple_value), tuple_value.to_json())
+        self.assertEqual(object_to_json(call), call.to_json())
+
     def test_session_scope_push_and_close_appended_to_events(self) -> None:
         from marktex.core import ScopeClose, ScopePush
 

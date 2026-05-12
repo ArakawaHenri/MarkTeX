@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Any, TypeAlias
 
 from marktex.mos import CallUnit
-from marktex.mos.model import value_to_json
 from marktex.source import SourceSpan
 
 
@@ -471,8 +470,4 @@ def object_to_json(value: Any) -> Any:
         return [object_to_json(item) for item in value]
     if isinstance(value, dict):
         return {str(key): object_to_json(item) for key, item in value.items()}
-    if isinstance(value, CallUnit):
-        return value.to_json()
-    if hasattr(value, "text") and value.__class__.__name__ == "RawString":
-        return value_to_json(value)
     return value
