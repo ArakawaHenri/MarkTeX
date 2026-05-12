@@ -7,7 +7,7 @@ from pathlib import Path
 
 from marktex import __version__
 from marktex.driver import ArtifactKind, InputStage, compile_file
-from marktex.driver.compiler import ALL_ARTIFACTS
+from marktex.driver.artifacts import ALL_ARTIFACTS
 from marktex.source import MarkTeXError
 
 
