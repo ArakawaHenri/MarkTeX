@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from marktex.core import (
     Block,
     BlockQuote,
+    Citation,
     CodeBlock,
     CodeExpression,
     CodePart,
@@ -14,9 +15,17 @@ from marktex.core import (
     ConditionalBranch,
     Document,
     DocumentPatch,
+    Emphasis,
     FootnoteDefinition,
+    FootnoteRef,
     Heading,
+    Image,
+    InlineCode,
+    InlineExpression,
+    InlineMath,
     InlineNode,
+    LineBreak,
+    Link,
     ListBlock,
     ListItem,
     MarkTeXObject,
@@ -26,14 +35,16 @@ from marktex.core import (
     Paragraph,
     ScopeClose,
     ScopePush,
+    Strikethrough,
+    Strong,
     Table,
+    Text,
     ThematicBreak,
 )
 from marktex.driver.artifacts import (
     ArtifactKind,
     artifact_payload_from_object,
 )
-from marktex.driver.inline import normalize_reference_label, parse_inline_nodes
 from marktex.driver.serde import surface_document_from_json
 from marktex.host.python import PythonHost, SymbolicValue
 from marktex.mos import CallUnit, MosValue, RawString, TupleValue, parse_mos
@@ -65,9 +76,25 @@ from marktex.surface import (
     RichTableNode,
     ScopeCloseNode,
     ScopeOpenNode,
+    SurfaceCitationNode,
+    SurfaceEmphasisNode,
+    SurfaceFootnoteRefNode,
+    SurfaceImageNode,
+    SurfaceInlineCodeNode,
+    SurfaceInlineExpressionNode,
+    SurfaceInlineMathNode,
+    SurfaceInlineNode,
+    SurfaceLineBreakNode,
+    SurfaceLinkNode,
+    SurfaceReferenceImageNode,
+    SurfaceReferenceLinkNode,
+    SurfaceStrikethroughNode,
+    SurfaceStrongNode,
+    SurfaceTextNode,
     SurfaceNode,
     ThematicBreakNode,
 )
+from marktex.surface.fallback_layer import normalize_reference_label
 
 
 @dataclass
@@ -126,7 +153,7 @@ def document_from_surface_payload(
     source = str(payload.get("source", ""))
     filename = str(payload.get("filename", ""))
     root_link_refs = collect_root_link_references(surface.nodes)
-    builder = _SurfaceCoreBuilder(filename, source, registry, host)
+    builder = _SurfaceCoreBuilder(filename, source, registry, host, footnotes)
     conditional_stack: list[_ConditionalFrame] = []
     page_layout = PageLayout()
     content_started = False
@@ -206,20 +233,7 @@ def document_from_surface_payload(
             host.execute_block(node.body, node.origin)
             append_runtime_events()
         elif isinstance(node, FootnoteDefinitionNode):
-            footnotes.append(
-                FootnoteDefinition(
-                    node.label,
-                    parse_inline_nodes(
-                        node.body,
-                        host,
-                        span_from_offsets(filename, node.body_offsets, source),
-                        source,
-                        source_offsets=node.body_offsets,
-                        link_refs=root_link_refs,
-                    ),
-                    node.origin,
-                )
-            )
+            builder.append_footnote(node, root_link_refs)
         elif isinstance(node, ConditionalNode):
             conditional = handle_conditional_node(
                 node,
@@ -279,11 +293,13 @@ class _SurfaceCoreBuilder:
         source: str,
         registry: SchemaRegistry,
         host: PythonHost,
+        footnotes: list[FootnoteDefinition],
     ) -> None:
         self.filename = filename
         self.source = source
         self.registry = registry
         self.host = host
+        self.footnotes = footnotes
 
     def blocks(
         self,
@@ -323,14 +339,14 @@ class _SurfaceCoreBuilder:
                 append(
                     Heading(
                         node.level,
-                        self.inlines(node.text, node.text_offsets, refs),
+                        self.inlines(node.children, refs),
                         node.origin,
                     )
                 )
             elif isinstance(node, ParagraphNode):
                 append(
                     Paragraph(
-                        self.inlines(node.text, node.text_offsets, refs),
+                        self.inlines(node.children, refs),
                         node.origin,
                     )
                 )
@@ -366,17 +382,26 @@ class _SurfaceCoreBuilder:
                 append(ThematicBreak(node.origin))
             elif isinstance(node, LinkReferenceDefinitionNode):
                 continue
+            elif isinstance(node, FootnoteDefinitionNode):
+                self.append_footnote(node, refs)
             elif isinstance(node, HostBlockNode):
                 raise MarkTeXError("host blocks are only supported at document root", node.origin)
             elif isinstance(node, ScopeOpenNode | ScopeCloseNode):
                 raise MarkTeXError("scope directives are only supported at document root", node.origin)
-            elif isinstance(node, FootnoteDefinitionNode):
-                raise MarkTeXError("footnote definitions are only supported at document root", node.origin)
             elif isinstance(node, ConditionalNode):
                 raise MarkTeXError("conditional blocks are not supported inside fallback containers", node.origin)
             else:
                 raise MarkTeXError(f"unsupported surface node in block context: {node!r}")
         return tuple(converted)
+
+    def append_footnote(self, node: FootnoteDefinitionNode, refs: dict[str, str]) -> None:
+        self.footnotes.append(
+            FootnoteDefinition(
+                node.label,
+                self.inlines(node.children, refs),
+                node.origin,
+            )
+        )
 
     def list_item(self, item: ListItemNode, inherited_refs: dict[str, str]) -> ListItem:
         return ListItem(self.blocks(item.children, inherited_refs), item.checked, item.origin)
@@ -393,32 +418,64 @@ class _SurfaceCoreBuilder:
             )
         )
         header = tuple(
-            self.inlines(cell, offsets, refs)
-            for cell, offsets in zip(rows[0], node.cell_offsets[0], strict=True)
+            self.inlines(cell, refs)
+            for cell in rows[0]
         )
         table_body = tuple(
             tuple(
-                self.inlines(cell, offsets, refs)
-                for cell, offsets in zip(row, offset_row, strict=True)
+                self.inlines(cell, refs)
+                for cell in row
             )
-            for row, offset_row in zip(rows[1:], node.cell_offsets[1:], strict=True)
+            for row in rows[1:]
         )
         return Table(columns, header, table_body, node.origin)
 
     def inlines(
         self,
-        text: str,
-        offsets: tuple[int, ...],
+        nodes: tuple[SurfaceInlineNode, ...],
         refs: dict[str, str],
     ) -> tuple[InlineNode, ...]:
-        return parse_inline_nodes(
-            text,
-            self.host,
-            span_from_offsets(self.filename, offsets, self.source),
-            self.source,
-            source_offsets=offsets,
-            link_refs=refs,
-        )
+        lowered = tuple(self.inline(node, refs) for node in nodes)
+        if not lowered:
+            return (Text("", None),)
+        return lowered
+
+    def inline(self, node: SurfaceInlineNode, refs: dict[str, str]) -> InlineNode:
+        if isinstance(node, SurfaceTextNode):
+            return Text(node.value, node.origin)
+        if isinstance(node, SurfaceInlineExpressionNode):
+            return InlineExpression(node.source, self.host.eval_expr(node.source, node.origin), node.origin)
+        if isinstance(node, SurfaceEmphasisNode):
+            return Emphasis(self.inlines(node.children, refs), node.origin)
+        if isinstance(node, SurfaceStrongNode):
+            return Strong(self.inlines(node.children, refs), node.origin)
+        if isinstance(node, SurfaceStrikethroughNode):
+            return Strikethrough(self.inlines(node.children, refs), node.origin)
+        if isinstance(node, SurfaceInlineCodeNode):
+            return InlineCode(node.value, node.origin)
+        if isinstance(node, SurfaceInlineMathNode):
+            return InlineMath(node.body, node.origin)
+        if isinstance(node, SurfaceLineBreakNode):
+            return LineBreak(node.hard, node.origin)
+        if isinstance(node, SurfaceLinkNode):
+            return Link(self.inlines(node.children, refs), node.target, node.origin)
+        if isinstance(node, SurfaceReferenceLinkNode):
+            target = refs.get(normalize_reference_label(node.label))
+            if target is None:
+                return Text(node.raw, node.origin)
+            return Link(self.inlines(node.children, refs), target, node.origin)
+        if isinstance(node, SurfaceImageNode):
+            return Image(node.alt, node.target, node.origin)
+        if isinstance(node, SurfaceReferenceImageNode):
+            target = refs.get(normalize_reference_label(node.label))
+            if target is None:
+                return Text(node.raw, node.origin)
+            return Image(node.alt, target, node.origin)
+        if isinstance(node, SurfaceFootnoteRefNode):
+            return FootnoteRef(node.label, node.origin)
+        if isinstance(node, SurfaceCitationNode):
+            return Citation(node.keys, node.kwargs, node.origin)
+        raise MarkTeXError(f"unsupported surface inline node: {node!r}")
 
 
 CORE_BLOCK_TYPES = (

@@ -34,6 +34,21 @@ class MosParserTests(unittest.TestCase):
         self.assertIsInstance(value, RawString)
         self.assertEqual(value.text, " helloworld")
 
+    def test_escaped_mos_head_and_key_are_not_syntax(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "escaped MOS call head"):
+            parse_mos(r"\layout: A4", context="document")
+        with self.assertRaisesRegex(MarkTeXError, "escaped MOS named argument"):
+            parse_mos(r"layout: \paper=A4", context="document")
+
+    def test_escaped_mos_value_is_still_a_value(self) -> None:
+        call = parse_mos(r"layout: paper=\A4, orientation=\landscape", context="document")[0]
+        paper = call.kwargs["paper"]
+        orientation = call.kwargs["orientation"]
+        self.assertIsInstance(paper, RawString)
+        self.assertIsInstance(orientation, RawString)
+        self.assertEqual(paper.text, "A4")
+        self.assertEqual(orientation.text, "landscape")
+
     def test_tuple_value_allows_leading_space(self) -> None:
         call = parse_mos("a: (x, y)")[0]
         value = call.args[0]

@@ -16,6 +16,7 @@ import marktex.runtime as runtime
 from marktex.bibliography import parse_bibtex_file, parse_bibliography_style, parse_citation_style
 from marktex.core import Document
 from marktex.driver import ArtifactKind, compile_file
+from marktex.driver.artifacts import ARTIFACT_VERSION
 from marktex.driver.compiler import build_document
 from marktex.source import MarkTeXError
 
@@ -24,11 +25,22 @@ class DriverTests(unittest.TestCase):
     def test_default_compile_writes_lualatex_target(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             directory = Path(raw_dir)
-            source = directory / "paper.mtx"
+            source_dir = directory / "source"
+            output_dir = directory / "output"
+            source_dir.mkdir()
+            output_dir.mkdir()
+            output_dir = output_dir.resolve()
+            source = source_dir / "paper.mtx"
             source.write_text("# Title\n\nHello [$ PAGE.CURRENT ].\n", encoding="utf-8")
-            result = compile_file(source)
-            output = directory / "paper.tex"
+            previous = Path.cwd()
+            try:
+                os.chdir(output_dir)
+                result = compile_file(source)
+            finally:
+                os.chdir(previous)
+            output = output_dir / "paper.tex"
             self.assertEqual(result.written[ArtifactKind.TARGET], output)
+            self.assertFalse((source_dir / "paper.tex").exists())
             self.assertIn("\\section{Title}", output.read_text(encoding="utf-8"))
             self.assertIn("\\thepage{}", output.read_text(encoding="utf-8"))
 
@@ -157,7 +169,7 @@ class DriverTests(unittest.TestCase):
             artifact = {
                 "kind": "ast",
                 "marktex_version": marktex.__version__,
-                "artifact_version": 1,
+                "artifact_version": ARTIFACT_VERSION,
                 "payload": {
                     "kind": "document",
                     "events": [],
@@ -187,13 +199,14 @@ class DriverTests(unittest.TestCase):
                     first.written[ArtifactKind.HOST],
                     from_stage="host",
                     no_host=True,
+                    out_dir=directory / "no-host",
                 )
 
     def test_scope_close_is_not_parsed_as_scope_open(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("!@ w\n!!@ w\nHello\n", encoding="utf-8")
-            result = compile_file(source, emits={ArtifactKind.EIR})
+            result = compile_file(source, emits={ArtifactKind.EIR}, out_dir=Path(raw_dir) / "build")
             eir = json.loads(result.artifacts[ArtifactKind.EIR])["payload"]
             self.assertEqual(eir["state"]["scopes"][0]["key"], "w")
             self.assertEqual(eir["state"]["scopes"][0]["close_order"], 1)
@@ -229,8 +242,8 @@ class DriverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("$$$python\nname = 'Ada'\n$$$\nHello [$ name ].\n", encoding="utf-8")
-            compile_file(source)
-            tex = source.with_suffix(".tex").read_text(encoding="utf-8")
+            result = compile_file(source, out_dir=Path(raw_dir) / "build")
+            tex = result.written[ArtifactKind.TARGET].read_text(encoding="utf-8")
             self.assertIn("Hello Ada.", tex)
 
     def test_host_block_runtime_event_affects_backend(self) -> None:
@@ -347,8 +360,8 @@ class DriverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("!? [$ PAGE.CURRENT == PAGE.TOTAL ]\nLast\n!!?\n", encoding="utf-8")
-            compile_file(source)
-            tex = source.with_suffix(".tex").read_text(encoding="utf-8")
+            result = compile_file(source, out_dir=Path(raw_dir) / "build")
+            tex = result.written[ArtifactKind.TARGET].read_text(encoding="utf-8")
             self.assertIn(r"\ifnum\value{page}=\getpagerefnumber{LastPage}", tex)
             self.assertIn("Last", tex)
 
@@ -400,6 +413,20 @@ class DriverTests(unittest.TestCase):
         self.assertIn(expected, shorthand.target_text)
         self.assertIn(expected, explicit.target_text)
         self.assertIn(expected, keyword_alias.target_text)
+
+    def test_escape_provenance_on_document_directive_keys_and_values(self) -> None:
+        escaped_opener = build_document(r"\!# layout: A4" "\n", filename="test.mtx")
+        self.assertEqual(escaped_opener.document.to_json()["blocks"][0]["kind"], "paragraph")
+        self.assertIn(r"!\# layout: A4", escaped_opener.target_text)
+
+        with self.assertRaisesRegex(MarkTeXError, "escaped MOS call head"):
+            build_document(r"!# \layout: A4" "\n", filename="test.mtx")
+
+        value = build_document(
+            r"!# layout: paper=\A4, orientation=\landscape" "\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[paperwidth=297mm,paperheight=210mm]{geometry}", value.target_text)
 
     def test_layout_applies_size_before_orientation(self) -> None:
         build = build_document(
@@ -580,8 +607,16 @@ class DriverTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(MarkTeXError, "scope directives are only supported at document root"):
             build_document("!? [$ True ]\n!@ w\n!!?\n", filename="test.mtx")
-        with self.assertRaisesRegex(MarkTeXError, "footnote definitions are only supported at document root"):
-            build_document("!? [$ True ]\n[^note]: Branch note.\n!!?\n", filename="test.mtx")
+
+    def test_fallback_footnote_definition_can_appear_inside_branch(self) -> None:
+        build = build_document(
+            "!? [$ True ]\n"
+            "Branch[^note]\n"
+            "[^note]: Branch note.\n"
+            "!!?\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\footnote{Branch note.}", build.target_text)
 
     def test_branch_page_setup_inherits_current_layout(self) -> None:
         build = build_document(
@@ -894,9 +929,14 @@ class DriverTests(unittest.TestCase):
         self.assertEqual([node["value"] for node in rows[1][0]], ["*", "literal", "*"])
         self.assertIn("*literal*", build.target_text)
 
-    def test_fallback_fenced_code_unclosed_fails(self) -> None:
-        with self.assertRaisesRegex(MarkTeXError, "unclosed code fence"):
-            build_document("~~~python\nx = 1\n", filename="test.mtx")
+    def test_tilde_fence_is_plain_fallback_text(self) -> None:
+        build = build_document("~~~python\nx = 1\n", filename="test.mtx")
+        paragraph = build.document.to_json()["blocks"][0]
+        self.assertEqual(paragraph["kind"], "paragraph")
+        self.assertEqual(
+            "".join(child.get("value", "\n") for child in paragraph["children"]),
+            "~~~python\nx = 1",
+        )
 
     def test_reference_style_links_and_images_lower(self) -> None:
         build = build_document(
@@ -929,24 +969,24 @@ class DriverTests(unittest.TestCase):
 
     def test_root_link_reference_is_visible_in_child_containers(self) -> None:
         build = build_document(
-            "[ref]: https://root.example\n\n"
             "- [item][ref]\n\n"
             "> [quote][ref]\n\n"
             "!? [$ True ]\n"
             "Branch [branch][ref].\n"
-            "!!?\n",
+            "!!?\n\n"
+            "[ref]: https://root.example\n",
             filename="test.mtx",
         )
         self.assertEqual(build.target_text.count(r"\href{https://root.example}"), 3)
 
     def test_conditional_link_reference_shadows_parent_inside_branch(self) -> None:
         build = build_document(
-            "[ref]: https://root.example\n\n"
             "!? [$ True ]\n"
-            "[ref]: https://branch.example\n"
             "Inside [x][ref].\n"
+            "[ref]: https://branch.example\n"
             "!!?\n"
-            "Outside [x][ref].\n",
+            "Outside [x][ref].\n\n"
+            "[ref]: https://root.example\n",
             filename="test.mtx",
         )
         self.assertIn(r"\href{https://branch.example}{x}", build.target_text)
@@ -954,12 +994,12 @@ class DriverTests(unittest.TestCase):
 
     def test_reference_style_image_uses_scoped_definitions(self) -> None:
         build = build_document(
-            "[logo]: root.pdf\n\n"
             "!? [$ True ]\n"
-            "[logo]: branch.pdf\n"
             "![Local][logo]\n"
+            "[logo]: branch.pdf\n"
             "!!?\n"
-            "![Root][logo]\n",
+            "![Root][logo]\n\n"
+            "[logo]: root.pdf\n",
             filename="test.mtx",
         )
         self.assertIn(r"\includegraphics{branch.pdf}", build.target_text)
@@ -1073,9 +1113,12 @@ class DriverTests(unittest.TestCase):
             with self.assertRaisesRegex(MarkTeXError, "undefined bibliography entry: Missing"):
                 build_document(source.read_text(encoding="utf-8"), filename=str(source))
 
-    def test_at_reference_payload_is_unsupported(self) -> None:
-        with self.assertRaisesRegex(MarkTeXError, "unsupported reference payload: @Knuth84"):
-            build_document("See [^@Knuth84].\n", filename="test.mtx")
+    def test_at_reference_payload_is_plain_footnote_label(self) -> None:
+        build = build_document(
+            "See [^@Knuth84].\n\n[^@Knuth84]: At-sign footnote.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\footnote{At-sign footnote.}", build.target_text)
 
     def test_valid_footnote_label_still_lowers(self) -> None:
         build = build_document(
@@ -1083,6 +1126,144 @@ class DriverTests(unittest.TestCase):
             filename="test.mtx",
         )
         self.assertIn(r"\footnote{Footnote body.}", build.target_text)
+
+    def test_citation_soft_parse_falls_back_to_footnote_label(self) -> None:
+        build = build_document(
+            "A[^cite]. B[^ cite:]. C[^\\cite: Knuth84].\n\n"
+            "[^cite]: Bare cite label.\n"
+            "[^ cite:]: Missing-key cite label.\n"
+            "[^\\cite: Knuth84]: Escaped cite label.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\footnote{Bare cite label.}", build.target_text)
+        self.assertIn(r"\footnote{Missing-key cite label.}", build.target_text)
+        self.assertIn(r"\footnote{Escaped cite label.}", build.target_text)
+
+    def test_marktex_citation_line_is_not_fallback_footnote_definition(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            directory = Path(raw_dir)
+            (directory / "refs.bib").write_text(
+                "@book{Knuth84, author={Donald Knuth}, title={The TeXbook}, year={1984}}\n",
+                encoding="utf-8",
+            )
+            source = directory / "paper.mtx"
+            source.write_text(
+                "!# bib: refs.bib\n"
+                "[^cite: Knuth84]: This is paragraph text, not a footnote definition.\n",
+                encoding="utf-8",
+            )
+            build = build_document(source.read_text(encoding="utf-8"), filename=str(source))
+        self.assertEqual(build.document.footnotes, ())
+        paragraph = build.document.to_json()["blocks"][0]
+        self.assertEqual(paragraph["children"][0]["kind"], "citation")
+        self.assertEqual(paragraph["children"][1]["value"], ": This is paragraph text, not a footnote definition.")
+        self.assertIn("[1]: This is paragraph text", build.target_text)
+
+    def test_marktex_inline_island_prevents_fallback_link_definition(self) -> None:
+        build = build_document('[$ "label" ]: https://example.com\n[label]\n', filename="test.mtx")
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["children"][0]["kind"], "inline_expr")
+        self.assertEqual(blocks[0]["children"][1]["value"], ": https://example.com")
+        self.assertIn("[label]", build.target_text)
+        self.assertNotIn(r"\href{https://example.com}", build.target_text)
+
+    def test_fallback_formatting_can_contain_marktex_inline_islands(self) -> None:
+        build = build_document(
+            "**before $x + y$ and [$ 1 + 1 ] after**\n",
+            filename="test.mtx",
+        )
+        strong = build.document.to_json()["blocks"][0]["children"][0]
+        self.assertEqual(strong["kind"], "strong")
+        self.assertEqual(
+            [child["kind"] for child in strong["children"]],
+            ["text", "inline_math", "text", "inline_expr", "text"],
+        )
+
+    def test_direct_link_text_can_contain_marktex_inline_islands(self) -> None:
+        build = build_document("[see $x$](https://example.com)\n", filename="test.mtx")
+        link = build.document.to_json()["blocks"][0]["children"][0]
+        self.assertEqual(link["kind"], "link")
+        self.assertEqual([child["kind"] for child in link["children"]], ["text", "inline_math"])
+
+    def test_surface_artifact_contains_typed_inline_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_dir:
+            path = Path(raw_dir) / "paper.mtx"
+            path.write_text("**bold $x$**\n", encoding="utf-8")
+            result = compile_file(path, emits={ArtifactKind.SURFACE}, out_dir=Path(raw_dir) / "build")
+            artifact = json.loads(result.artifacts[ArtifactKind.SURFACE])
+        paragraph = artifact["payload"]["nodes"][0]
+        self.assertEqual(paragraph["kind"], "paragraph")
+        self.assertEqual(paragraph["children"][0]["kind"], "strong")
+        self.assertEqual(
+            [child["kind"] for child in paragraph["children"][0]["children"]],
+            ["text", "inline_math"],
+        )
+
+    def test_footnote_label_allows_escaped_closing_bracket(self) -> None:
+        build = build_document(
+            "Claim[^ a\\]b].\n\n[^ a\\]b]: Escaped bracket label.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\footnote{Escaped bracket label.}", build.target_text)
+
+    def test_footnote_definition_body_can_contain_marktex_inline_islands(self) -> None:
+        build = build_document(
+            "Claim[^n].\n\n[^n]: Body $x$ and [$ 1 + 1 ].\n",
+            filename="test.mtx",
+        )
+        footnote = build.document.to_json()["footnotes"][0]
+        self.assertEqual(
+            [child["kind"] for child in footnote["children"]],
+            ["text", "inline_math", "text", "inline_expr", "text"],
+        )
+
+    def test_escaped_citation_keyword_can_define_ordinary_footnote(self) -> None:
+        build = build_document(
+            "Claim[^\\cite: Knuth84].\n\n"
+            "[^\\cite: Knuth84]: Escaped citation keywords fall back to ordinary footnotes.\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\footnote{Escaped citation keywords fall back to ordinary footnotes.}", build.target_text)
+
+    def test_fallback_declarations_must_be_tail_of_scope(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, "fallback declarations must appear after all content"):
+            build_document(
+                "Use [project][project].\n\n"
+                "[project]: https://example.com/marktex\n"
+                "More content.\n",
+                filename="test.mtx",
+            )
+        with self.assertRaisesRegex(MarkTeXError, "fallback declarations must appear after all content"):
+            build_document(
+                "!? [$ True ]\n"
+                "Claim[^n].\n"
+                "[^n]: Branch note.\n"
+                "More branch content.\n"
+                "!!?\n",
+                filename="test.mtx",
+            )
+
+    def test_escaped_and_indented_declarations_are_literal_text(self) -> None:
+        build = build_document(
+            "\\[project]: https://example.com/marktex\n"
+            " [other]: https://example.com/other\n"
+            "[project]\n",
+            filename="test.mtx",
+        )
+        values = "".join(
+            child["value"]
+            for child in build.document.to_json()["blocks"][0]["children"]
+            if child["kind"] == "text"
+        )
+        self.assertIn("[project]: https://example.com/marktex", values)
+        self.assertIn(" [other]: https://example.com/other", values)
+        self.assertIn("[project]", values)
+        self.assertNotIn(r"\href{https://example.com/marktex}", build.target_text)
+
+    def test_empty_reference_payload_is_plain_text(self) -> None:
+        build = build_document("[^]\n", filename="test.mtx")
+        self.assertEqual(build.document.to_json()["blocks"][0]["children"][0]["value"], "[^]")
 
     def test_custom_bibliography_style_can_include_uncited_entries(self) -> None:
         with tempfile.TemporaryDirectory() as raw_dir:
@@ -1176,8 +1357,8 @@ class DriverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("Value [$ 'ok' ] page [$ PAGE.CURRENT ].\n", encoding="utf-8")
-            compile_file(source, no_host=True)
-            tex = source.with_suffix(".tex").read_text(encoding="utf-8")
+            result = compile_file(source, no_host=True, out_dir=Path(raw_dir) / "build")
+            tex = result.written[ArtifactKind.TARGET].read_text(encoding="utf-8")
             self.assertIn("Value ok page", tex)
             self.assertIn(r"\thepage{}", tex)
 
@@ -1317,12 +1498,13 @@ class DriverTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
-    def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def run_cli(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        repo = Path(__file__).resolve().parents[1]
         env = os.environ.copy()
-        env["PYTHONPATH"] = "src"
+        env["PYTHONPATH"] = str(repo / "src")
         return subprocess.run(
             [sys.executable, "-m", "marktex.cli", *args],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=cwd or repo,
             env=env,
             text=True,
             stdout=subprocess.PIPE,
@@ -1359,7 +1541,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_dir:
             source = Path(raw_dir) / "paper.mtx"
             source.write_text("Hello\n", encoding="utf-8")
-            result = self.run_cli(str(source), "--emit", "all")
+            result = self.run_cli(str(source), "--emit", "all", cwd=Path(raw_dir))
             self.assertEqual(result.returncode, 0)
             build_dir = Path(raw_dir) / "paper.mtxbuild"
             self.assertTrue((build_dir / "paper.surface.json").exists())
@@ -1444,9 +1626,10 @@ class CliTests(unittest.TestCase):
                 "--diagnostic-format",
                 " text ",
                 str(source),
+                cwd=Path(raw_dir),
             )
             self.assertEqual(result.returncode, 0)
-            self.assertTrue(source.with_suffix(".tex").exists())
+            self.assertTrue((Path(raw_dir) / "paper.tex").exists())
 
 
 class FallbackSyntaxTests(unittest.TestCase):
@@ -1462,10 +1645,21 @@ class FallbackSyntaxTests(unittest.TestCase):
         build = build_document("Before\n\n---\n\nAfter\n", filename="test.mtx")
         self.assertIn(r"\par\noindent\rule{\linewidth}{0.4pt}\par", build.target_text)
 
-    def test_tilde_fenced_code_block_lowers(self) -> None:
+    def test_backtick_code_fence_is_marktex_owned_language_block(self) -> None:
+        build = build_document("```\n# literal\n[^note]: literal\n```\n", filename="test.mtx")
+        self.assertEqual(build.document.to_json()["blocks"][0]["kind"], "code_block")
+        self.assertEqual(build.document.footnotes, ())
+        self.assertIn(r"\#\ literal", build.target_text)
+
+    def test_tilde_fence_is_plain_paragraph_text(self) -> None:
         build = build_document("~~~\ncode block\n~~~\n", filename="test.mtx")
-        self.assertIn(r"\par\begingroup\ttfamily", build.target_text)
-        self.assertIn(r"code\ block", build.target_text)
+        paragraph = build.document.to_json()["blocks"][0]
+        self.assertEqual(paragraph["kind"], "paragraph")
+        self.assertEqual(
+            "".join(child.get("value", "\n") for child in paragraph["children"]),
+            "~~~\ncode block\n~~~",
+        )
+        self.assertNotIn(r"\par\begingroup\ttfamily", build.target_text)
 
     def test_indented_code_is_plain_paragraph_text(self) -> None:
         build = build_document("    indented code\n", filename="test.mtx")
@@ -1500,6 +1694,25 @@ class FallbackSyntaxTests(unittest.TestCase):
         self.assertIn(r" \# Heading", build.target_text)
         self.assertNotIn(r"\section{Heading}", build.target_text)
         self.assertNotIn(r"\par\begingroup\ttfamily", build.target_text)
+
+    def test_escaped_fallback_control_openers_are_plain_text(self) -> None:
+        build = build_document(
+            r"\# Heading" "\n"
+            r"\- item" "\n"
+            r"\> quote" "\n"
+            r"\---" "\n",
+            filename="test.mtx",
+        )
+        blocks = build.document.to_json()["blocks"]
+        self.assertEqual([block["kind"] for block in blocks], ["paragraph"])
+        parts = [
+            child["value"] if child["kind"] == "text" else "\n"
+            for child in blocks[0]["children"]
+        ]
+        self.assertEqual("".join(parts), "# Heading\n- item\n> quote\n---")
+        self.assertNotIn(r"\section{Heading}", build.target_text)
+        self.assertNotIn(r"\begin{itemize}", build.target_text)
+        self.assertNotIn(r"\begin{quote}", build.target_text)
 
     def test_atx_heading_consumes_only_control_space(self) -> None:
         build = build_document("#  Title ###\n#Title\n", filename="test.mtx")
@@ -1562,6 +1775,13 @@ class FallbackSyntaxTests(unittest.TestCase):
         )
         self.assertIn(r"\href{https://example.com}", build.target_text)
         self.assertIn("link text", build.target_text)
+
+    def test_reference_link_labels_and_targets_use_escape_provenance(self) -> None:
+        build = build_document(
+            "[link][a\\]b]\n\n[a\\]b]: https://example\\.com\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\href{https://example.com}{link}", build.target_text)
 
 
 class InlineParserTests(unittest.TestCase):

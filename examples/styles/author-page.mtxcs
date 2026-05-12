@@ -1,3 +1,2 @@
 style: name=author-page;
 citation: mode=author-page, form=paren, delimiter=`; `, locator-prefix=` `;
-

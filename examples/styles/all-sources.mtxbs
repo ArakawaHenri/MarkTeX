@@ -1,4 +1,3 @@
 style: name=all-sources;
 references: title=Sources, include=all, sort=key, placement=new-page, label=key;
 template: default, author, title, container, year, url;
-

@@ -56,8 +56,23 @@ from marktex.surface import (
     RichTableNode,
     ScopeCloseNode,
     ScopeOpenNode,
+    SurfaceCitationNode,
     SurfaceDocument,
+    SurfaceEmphasisNode,
+    SurfaceFootnoteRefNode,
+    SurfaceImageNode,
+    SurfaceInlineCodeNode,
+    SurfaceInlineExpressionNode,
+    SurfaceInlineMathNode,
+    SurfaceInlineNode,
+    SurfaceLineBreakNode,
+    SurfaceLinkNode,
     SurfaceNode,
+    SurfaceReferenceImageNode,
+    SurfaceReferenceLinkNode,
+    SurfaceStrikethroughNode,
+    SurfaceStrongNode,
+    SurfaceTextNode,
     ThematicBreakNode,
 )
 
@@ -400,8 +415,7 @@ def surface_node_to_json(node: SurfaceNode) -> dict[str, object]:
         return {
             "kind": "footnote_definition",
             "label": node.label,
-            "body": node.body,
-            "body_offsets": list(node.body_offsets),
+            "children": [surface_inline_to_json(child) for child in node.children],
             "origin": span_to_json(node.origin),
         }
     if isinstance(node, ConditionalNode):
@@ -415,15 +429,13 @@ def surface_node_to_json(node: SurfaceNode) -> dict[str, object]:
         return {
             "kind": "heading",
             "level": node.level,
-            "text": node.text,
-            "text_offsets": list(node.text_offsets),
+            "children": [surface_inline_to_json(child) for child in node.children],
             "origin": span_to_json(node.origin),
         }
     if isinstance(node, ParagraphNode):
         return {
             "kind": "paragraph",
-            "text": node.text,
-            "text_offsets": list(node.text_offsets),
+            "children": [surface_inline_to_json(child) for child in node.children],
             "origin": span_to_json(node.origin),
         }
     if isinstance(node, CodeFenceNode):
@@ -446,10 +458,9 @@ def surface_node_to_json(node: SurfaceNode) -> dict[str, object]:
             "column_specs": list(node.column_specs),
             "column_spec_kinds": list(node.column_spec_kinds),
             "column_spec_offsets": [list(offsets) for offsets in node.column_spec_offsets],
-            "rows": [list(row) for row in node.rows],
-            "cell_offsets": [
-                [list(offsets) for offsets in row]
-                for row in node.cell_offsets
+            "rows": [
+                [[surface_inline_to_json(child) for child in cell] for cell in row]
+                for row in node.rows
             ],
             "origin": span_to_json(node.origin),
         }
@@ -489,6 +500,72 @@ def surface_list_item_to_json(item: ListItemNode) -> dict[str, object]:
     }
 
 
+def surface_inline_to_json(node: SurfaceInlineNode) -> dict[str, object]:
+    if isinstance(node, SurfaceTextNode):
+        return {"kind": "text", "value": node.value, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceInlineExpressionNode):
+        return {"kind": "inline_expr", "source": node.source, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceEmphasisNode):
+        return {
+            "kind": "emphasis",
+            "children": [surface_inline_to_json(child) for child in node.children],
+            "origin": span_to_json(node.origin),
+        }
+    if isinstance(node, SurfaceStrongNode):
+        return {
+            "kind": "strong",
+            "children": [surface_inline_to_json(child) for child in node.children],
+            "origin": span_to_json(node.origin),
+        }
+    if isinstance(node, SurfaceStrikethroughNode):
+        return {
+            "kind": "strikethrough",
+            "children": [surface_inline_to_json(child) for child in node.children],
+            "origin": span_to_json(node.origin),
+        }
+    if isinstance(node, SurfaceInlineCodeNode):
+        return {"kind": "inline_code", "value": node.value, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceInlineMathNode):
+        return {"kind": "inline_math", "body": node.body, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceLineBreakNode):
+        return {"kind": "line_break", "hard": node.hard, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceLinkNode):
+        return {
+            "kind": "link",
+            "children": [surface_inline_to_json(child) for child in node.children],
+            "target": node.target,
+            "origin": span_to_json(node.origin),
+        }
+    if isinstance(node, SurfaceReferenceLinkNode):
+        return {
+            "kind": "reference_link",
+            "children": [surface_inline_to_json(child) for child in node.children],
+            "label": node.label,
+            "raw": node.raw,
+            "origin": span_to_json(node.origin),
+        }
+    if isinstance(node, SurfaceImageNode):
+        return {"kind": "image", "alt": node.alt, "target": node.target, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceReferenceImageNode):
+        return {
+            "kind": "reference_image",
+            "alt": node.alt,
+            "label": node.label,
+            "raw": node.raw,
+            "origin": span_to_json(node.origin),
+        }
+    if isinstance(node, SurfaceFootnoteRefNode):
+        return {"kind": "footnote_ref", "label": node.label, "origin": span_to_json(node.origin)}
+    if isinstance(node, SurfaceCitationNode):
+        return {
+            "kind": "citation",
+            "keys": list(node.keys),
+            "kwargs": dict(node.kwargs),
+            "origin": span_to_json(node.origin),
+        }
+    raise MarkTeXError(f"unsupported surface inline node in artifact: {node!r}")
+
+
 def surface_node_from_json(payload: object) -> SurfaceNode:
     if not isinstance(payload, dict):
         raise MarkTeXError("invalid surface node in artifact")
@@ -509,8 +586,7 @@ def surface_node_from_json(payload: object) -> SurfaceNode:
     if kind == "footnote_definition":
         return FootnoteDefinitionNode(
             str(payload.get("label", "")),
-            str(payload.get("body", "")),
-            tuple(int_value(item) for item in as_list(payload.get("body_offsets"))),
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
             origin,
         )
     if kind == "conditional":
@@ -522,15 +598,13 @@ def surface_node_from_json(payload: object) -> SurfaceNode:
     if kind == "heading":
         return HeadingNode(
             int_value(payload.get("level"), default=1),
-            str(payload.get("text", "")),
-            tuple(int_value(item) for item in as_list(payload.get("text_offsets"))),
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
             origin,
         )
     if kind == "paragraph":
         return ParagraphNode(
-            str(payload.get("text", "")),
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
             origin,
-            tuple(int_value(item) for item in as_list(payload.get("text_offsets"))),
         )
     if kind == "code_fence":
         return CodeFenceNode(
@@ -549,13 +623,12 @@ def surface_node_from_json(payload: object) -> SurfaceNode:
                 tuple(int_value(offset) for offset in as_list(offsets))
                 for offsets in as_list(payload.get("column_spec_offsets"))
             ),
-            tuple(tuple(str(cell) for cell in as_list(row)) for row in as_list(payload.get("rows"))),
             tuple(
                 tuple(
-                    tuple(int_value(offset) for offset in as_list(offsets))
-                    for offsets in as_list(row)
+                    tuple(surface_inline_from_json(child) for child in as_list(cell))
+                    for cell in as_list(row)
                 )
-                for row in as_list(payload.get("cell_offsets"))
+                for row in as_list(payload.get("rows"))
             ),
             origin,
         )
@@ -591,6 +664,69 @@ def surface_list_item_from_json(payload: object) -> ListItemNode:
         optional_bool_value(payload.get("checked"), "surface list item checked"),
         required_span(payload.get("origin")),
     )
+
+
+def surface_inline_from_json(payload: object) -> SurfaceInlineNode:
+    if not isinstance(payload, dict):
+        raise MarkTeXError("invalid surface inline node in artifact")
+    kind = payload.get("kind")
+    origin = required_span(payload.get("origin"))
+    if kind == "text":
+        return SurfaceTextNode(str(payload.get("value", "")), origin)
+    if kind == "inline_expr":
+        return SurfaceInlineExpressionNode(str(payload.get("source", "")), origin)
+    if kind == "emphasis":
+        return SurfaceEmphasisNode(
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
+            origin,
+        )
+    if kind == "strong":
+        return SurfaceStrongNode(
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
+            origin,
+        )
+    if kind == "strikethrough":
+        return SurfaceStrikethroughNode(
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
+            origin,
+        )
+    if kind == "inline_code":
+        return SurfaceInlineCodeNode(str(payload.get("value", "")), origin)
+    if kind == "inline_math":
+        return SurfaceInlineMathNode(str(payload.get("body", "")), origin)
+    if kind == "line_break":
+        return SurfaceLineBreakNode(bool_value(payload.get("hard", True), "surface line break hard"), origin)
+    if kind == "link":
+        return SurfaceLinkNode(
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
+            str(payload.get("target", "")),
+            origin,
+        )
+    if kind == "reference_link":
+        return SurfaceReferenceLinkNode(
+            tuple(surface_inline_from_json(item) for item in as_list(payload.get("children"))),
+            str(payload.get("label", "")),
+            str(payload.get("raw", "")),
+            origin,
+        )
+    if kind == "image":
+        return SurfaceImageNode(str(payload.get("alt", "")), str(payload.get("target", "")), origin)
+    if kind == "reference_image":
+        return SurfaceReferenceImageNode(
+            str(payload.get("alt", "")),
+            str(payload.get("label", "")),
+            str(payload.get("raw", "")),
+            origin,
+        )
+    if kind == "footnote_ref":
+        return SurfaceFootnoteRefNode(str(payload.get("label", "")), origin)
+    if kind == "citation":
+        return SurfaceCitationNode(
+            tuple(str(item) for item in as_list(payload.get("keys"))),
+            {str(key): str(value) for key, value in as_dict(payload.get("kwargs")).items()},
+            origin,
+        )
+    raise MarkTeXError(f"unsupported surface inline node in artifact: {kind}")
 
 
 def required_span(payload: object) -> SourceSpan:

@@ -8,7 +8,7 @@
   EIR, backend IR, and target output.
 - Implement schema-driven MOS value shading.
 - Support headings, paragraphs, code fences, lists, block quotes, thematic
-  breaks, rich tables, pipe tables, practical inline Markdown-derived MarkTeX
-  syntax, footnotes, citation placeholders, simple conditionals, and page
-  placeholders.
+  breaks, rich tables, pipe tables, practical Markdown-inspired MarkTeX
+  fallback syntax, inline/display math, footnotes, citation placeholders,
+  simple conditionals, and page placeholders.
 - Add `--no-host` and JSON diagnostics.

@@ -1,8 +1,8 @@
-# Citation
-
 !# bib: references.bib
 !# citestyle: numeric
 !# bibstyle: numeric
+
+# Citation
 
 MarkTeX supports citation placeholders [^ cite: Knuth84, pages=12-15 ] and
 footnotes.[^note]

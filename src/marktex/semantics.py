@@ -23,6 +23,7 @@ from marktex.core import (
     Table,
 )
 from marktex.mos import CallUnit, MosValue, RawString
+from marktex.reference import CITATION_KWARGS
 from marktex.source import MarkTeXError, SourceSpan
 from marktex.surface.grammar import is_footnote_label
 
@@ -48,7 +49,6 @@ DOCUMENT_RESOURCE_HEADS = frozenset(("bib", "bib+", "bib-"))
 DOCUMENT_STYLE_HEADS = frozenset(("bibstyle", "citestyle"))
 CITATION_STYLE_MODES = frozenset(("numeric", "author-year", "author-page", "note"))
 CITATION_STYLE_FORMS = frozenset(("square", "superscript", "paren", "footnote", "plain"))
-CITATION_KWARGS = frozenset(("page", "pages", "locator", "p"))
 DIMENSION_RE = re.compile(r"^(?:\d+(?:\.\d+)?|\.\d+)(?:pt|bp|mm|cm|in|pc|em|ex)$")
 DIMENSION_TO_PT = {
     "pt": 1.0,

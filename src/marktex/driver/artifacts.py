@@ -197,7 +197,7 @@ def write_artifacts(
         written[kind] = path
         return written
 
-    target_dir = out_dir or input_path.with_suffix(".mtxbuild")
+    target_dir = out_dir or (Path.cwd() / f"{input_path.stem}.mtxbuild")
     target_dir.mkdir(parents=True, exist_ok=True)
     for kind, text in artifacts.items():
         path = target_dir / artifact_filename(input_path, kind, target)
@@ -211,9 +211,7 @@ def default_single_output(
     kind: ArtifactKind,
     target: Literal["lualatex"],
 ) -> Path:
-    if kind == ArtifactKind.TARGET:
-        return input_path.with_suffix(target_artifact_suffix(target))
-    return input_path.with_name(artifact_filename(input_path, kind, target))
+    return Path.cwd() / artifact_filename(input_path, kind, target)
 
 
 def artifact_filename(input_path: Path, kind: ArtifactKind, target: Literal["lualatex"]) -> str:

@@ -192,9 +192,10 @@ Every JSON artifact has the same envelope:
 }
 ```
 
-The `surface` artifact contains recognized MarkTeX surface nodes, source spans,
-and the original source text needed for accurate inline lowering. The `host.py`
-artifact is an executable construction script; from `.mtx` input, the compiler
+The `surface` artifact contains recognized MarkTeX surface nodes, typed surface
+inline trees, source spans, and the original source text needed for later host
+expression evaluation. The `host.py` artifact is an executable construction
+script; from `.mtx` input, the compiler
 generates this script and executes it to obtain the canonical `Document`. It is
 trusted Python, and `--from host` is therefore equivalent to executing that
 artifact. `--from host --no-host` is invalid.
@@ -227,25 +228,26 @@ src/marktex/backend/lualatex/      LuaLaTeX lowering
 
 ## 5. Surface Recognition
 
-The 0.1 parser is deliberately thin and line oriented. It recognizes MarkTeX
-controls at column zero of a physical line. Chunks not claimed by those
-controls are parsed by MarkTeX's private fallback parser and immediately
-lowered to ordinary MarkTeX AST nodes. This is analogous to C++ owning syntax
-that originated in C: the spelling may be familiar, but the language contract
-is MarkTeX's.
+The 0.1 surface pipeline is MarkTeX-first. It recognizes MarkTeX controls,
+owned-language blocks, rich tables, and single-line MarkTeX inline islands
+before applying Markdown-inspired fallback parsing to the remaining text lanes.
+The public `surface` artifact contains typed MarkTeX surface nodes, not
+Markdown tokens or a Markdown AST.
 
 Recognition order:
 
-1. Backtick code fences beginning with `` ``` ``.
+1. Backtick code fences beginning with `` ``` `` or `` ```$ ``.
 2. Host blocks beginning with `$$$`.
 3. Display math blocks delimited by column-one `$$` lines.
-4. Footnote definitions.
-5. Rich tables beginning with `+++`.
-6. Conditional controls.
-7. Scope close `!!@`.
-8. Document directive `!#`.
-9. Scope open `!@`.
-10. MarkTeX fallback blocks and inline content.
+4. Rich tables beginning with `+++`.
+5. Conditional controls.
+6. Scope close `!!@`.
+7. Document directive `!#`.
+8. Scope open `!@`.
+9. Single-line MarkTeX inline islands in the remaining text, such as
+   `[$ ... ]`, complete `[^cite: ...]` citations, inline code, and inline math.
+10. Markdown-inspired fallback blocks and inline content over the remaining
+    raw text lanes.
 
 `!!@` must be checked before `!@`, and `!?!?` before `!?`, because these forms
 share prefixes.
@@ -299,6 +301,12 @@ Rules:
   matches inside it are inactive.
 - Only call heads and parameter names are trimmed for matching.
 - Values are not trimmed by the parser.
+
+Backslash escape is provenance-aware. The escaped character remains a value
+character, but it cannot act as a MOS head, parameter name, structural
+delimiter, or MarkTeX control character. For example, `!# layout: \A4` passes
+the value `A4` to layout validation, while `!# \layout: A4` is a hard document
+directive whose MOS head is escaped and therefore invalid.
 
 For line-start `!#` and `!@` controls, the surface parser collects physical
 continuation lines before passing the payload to MOS. For example,
@@ -657,13 +665,11 @@ is valid 0.1 directionally, but unsupported by the 0.1 LuaLaTeX backend.
 
 0.1 supports practical Markdown-inspired spellings as MarkTeX fallback syntax.
 This is not a public Markdown adapter layer and it is not a direct promise of
-Markdown dialect compatibility: MarkTeX controls are recognized first, then
-unclaimed text chunks are parsed and converted directly to MarkTeX AST.
+Markdown dialect compatibility.
 
 - ATX headings `#` through `######`;
 - setext headings;
 - paragraphs separated by blank lines;
-- fenced code blocks;
 - unordered, ordered, nested, loose, and tight lists;
 - task list markers `- [ ]` and `- [x]`;
 - block quotes;
@@ -671,8 +677,6 @@ unclaimed text chunks are parsed and converted directly to MarkTeX AST.
 - pipe tables with an alignment row;
 - inline emphasis `*text*` and `_text_`;
 - inline strong `**text**` and `__text__`;
-- inline code `` `text` ``;
-- inline math `$x+y$`;
 - strikethrough `~~text~~`;
 - links `[label](url)`;
 - images `![alt](src)`;
@@ -701,6 +705,8 @@ the current container column; MarkTeX does not inherit Markdown's `0..3`
 leading-space tolerance. For example, `- x` consumes the list opener `- ` and
 uses `x` as content, while `-  x` keeps one leading content space. `# Title`
 is a heading, but ` # Title` and `#Title` are ordinary paragraph text.
+Escaped prefixes such as `\# Title`, `\- item`, and `\> quote` are ordinary
+text because the escaped character cannot start fallback syntax.
 
 A physical newline inside a paragraph is a MarkTeX hard line break. A backslash
 immediately followed by a physical newline is line continuation and contributes
@@ -716,13 +722,17 @@ list markers in the same ordered block must be sequential; switching between
 ordered and unordered at the same level creates a sibling list block.
 
 Inline MarkTeX delimiter forms are physical-line local. `[$ ... ]` host
-expressions and `$...$` inline math must open and close on the same physical
-line. A failed form is ordinary text; line continuation in that ordinary text
-does not trigger a second inline parse pass. Therefore `[$ x\` followed by
-`y ]` and `$x\` followed by `y$` are text, not expressions or math. Inside
-math, the body is raw target math text and MarkTeX inline parsing is inactive.
-Inline code, emphasis, strong, and strikethrough delimiters are mechanical
-same-line pairs; unclosed or cross-line pairs remain text.
+expressions, complete `[^cite: ...]` citations, inline code, and `$...$`
+inline math must open and close on the same physical line. A failed form is
+ordinary text; line continuation in that ordinary text does not trigger a
+second inline parse pass. Therefore `[$ x\` followed by `y ]` and `$x\`
+followed by `y$` are text, not expressions or math. Inline code and math bodies
+are owned literal regions, so MarkTeX inline parsing is inactive inside them.
+Fallback emphasis, strong, and strikethrough delimiters are mechanical
+same-line pairs; unclosed, escaped, or cross-line pairs remain text. Fallback
+inline containers may contain already-recognized MarkTeX inline islands, so
+`**value $x$**` is a strong node containing an inline-math child rather than a
+post-hoc Markdown parse over source text.
 
 Display math uses column-one fence lines:
 
@@ -737,13 +747,14 @@ or a line with trailing spaces is ordinary fallback text. Display math body is
 owned by the math language, so MarkTeX backslash continuation and inline
 parsing do not apply inside it.
 
-Reference-style link and image definitions are MarkTeX fallback declarations,
-not a Markdown global pre-scan. Root definitions are visible to root content
-and child containers such as lists, block quotes, and conditional branches.
-Definitions inside a conditional branch are visible only inside that branch and
-may shadow root definitions there. Definitions inside child containers are
-local to that container and may shadow inherited definitions for their own
-children.
+Fallback declarations are literal-line-start suffixes of their current scope.
+They include reference-style link/image definitions and footnote definitions.
+Earlier content in the same root, branch, block quote, or list item may refer
+to them, but once a declaration appears, the rest of that scope may contain
+only declarations. Escaped or indented openers, such as `\[project]: ...` or
+` [project]: ...`, are text. Root declarations are inherited by child
+containers; conditional-branch and child-container declarations are local and
+may shadow inherited definitions.
 
 ## 12. Code Blocks
 
@@ -772,8 +783,9 @@ placeholders inside the displayed code block.
 
 Only a `$` prefix enables code interpolation. An info string such as
 `` ```python interp `` is just an ordinary code-fence language string.
-Both top-level backtick fences and fallback fences report `unclosed code fence`
-when the closing fence is missing.
+Backtick code fences are MarkTeX owned-language blocks, not fallback syntax;
+they report `unclosed code fence` when the closing fence is missing.
+Tilde fences are ordinary fallback paragraph text in 0.1.
 
 Indented code blocks are not MarkTeX syntax. Leading spaces at the current
 container column are ordinary paragraph text; fenced code is the canonical code
@@ -802,18 +814,21 @@ Rules:
 - Blank lines are errors.
 - Multiline cells are not supported.
 - Every row must have the same number of cells as there are column specs.
-- Literal `|` is written as `\|`.
+- Literal `|` is written as `\|`; other escapes remain available to the MOS or
+  fallback inline layer that consumes the value.
 
 The 0.1 LuaLaTeX backend emits a simple `tabular`. Column MOS alignment lowers
 to `l`, `c`, or `r` when the column spec provides `align=left|center|right`.
 Unknown alignment values are diagnostics; omitted alignment defaults to `left`.
+Cell content is a fallback-enabled text lane, so MarkTeX inline islands and
+Markdown-inspired inline containers can both appear inside cells.
 
 Pipe tables use familiar pipe spelling as MarkTeX fallback syntax and lower to
 the same `Table` core object. Rows must start and end with `|`. A cell consumes
 at most one delimiter-adjacent ASCII padding space on each side: `| x |`
 contains `x`, while `|  x  |` contains ` x `. Only `\|` is interpreted by the
 table splitter as a literal pipe; other backslash escapes are left for the
-inline parser. The alignment row is converted into table-column metadata
+fallback inline layer. The alignment row is converted into table-column metadata
 before backend lowering. Header and body rows must have exactly the same
 number of cells as the alignment row; MarkTeX does not silently pad or
 truncate pipe table rows. Pipe tables are not rich table syntax, even though
@@ -829,8 +844,12 @@ Claim[^note].
 [^note]: This is the footnote body.
 ```
 
-Footnote labels may contain letters, numbers, `_`, `.`, `:`, and `-`.
-Definitions are single-line in 0.1. An undefined footnote reference is a
+Footnote labels are arbitrary non-empty cooked payloads. Escapes may be used
+inside the label to include syntax characters, such as `[^ a\]b]: body`.
+Footnote definitions follow the fallback declaration placement rules above.
+Definition bodies are single-line in 0.1. After the definition marker, one
+ASCII padding space is consumed when present: `[^x]: body` has body `body`,
+while `[^x]:  body` has body ` body`. An undefined footnote reference is a
 backend diagnostic.
 
 In LuaLaTeX output, ordinary inline footnote references lower to `\footnote`.
@@ -848,21 +867,22 @@ Explicit citations:
 See [^ cite: Knuth84, pages=12-15 ].
 ```
 
-Citation payloads reuse MOS in reference context. The call head is `cite`; raw
-positional args become citation keys, and raw kwargs become citation options.
-The backend resolves each key against active BibTeX resources and renders the
-in-text citation through the active `.mtxcs` citation style.
+Citation payloads are a MarkTeX interpretation of a reference payload. If the
+payload can be parsed as a complete `cite:` MOS call, raw positional args
+become citation keys and raw kwargs become citation options. The backend
+resolves each key against active BibTeX resources and renders the in-text
+citation through the active `.mtxcs` citation style. If citation parsing is not
+complete and valid, the same inline payload is left for fallback footnote
+parsing.
 
-MarkTeX footnotes using familiar bracket spelling and bibliography citations are
-deliberately separate:
-
-- `[^note]` always lowers as a MarkTeX footnote using familiar bracket spelling;
-- `[^ cite: Key ]` always lowers through the active citation style, even when
-  that style is footnote-based.
-
-There is no `[^@key]` citation shorthand. A reference payload containing `@`
-does not match the footnote-label grammar and fails as an unsupported reference
-payload.
+Footnotes and bibliography citations are separate. `[^note]` is a footnote;
+`[^ cite: Key ]` and `[^cite: Key ]` lower through the active citation style,
+even when that style is footnote-based. There is no `[^@key]` citation
+shorthand. Incomplete citation payloads such as `[^cite]` and `[^ cite:]`
+remain footnotes. Escaping the keyword, as in `[^\cite: Key]`, prevents
+citation recognition; the matching definition may use `[^\cite: Key]: ...`.
+A line beginning with `[^cite: Key]: ...` starts with a MarkTeX citation island,
+not a fallback footnote-definition opener.
 
 Bibliography resource declarations should use MOS document directives:
 
@@ -1254,26 +1274,13 @@ lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-
 lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-comprehensive /tmp/marktex-comprehensive/comprehensive.tex
 ```
 
-0.1 changelog:
-
-- Add the `marktex` Python package and `mtxc` CLI.
-- Generate the selected backend target artifact by default.
-- Add self-contained pipeline artifact emission for surface, host script, AST,
-  EIR, backend IR, and target output.
-- Implement schema-driven MOS value shading.
-- Support headings, paragraphs, code fences, lists, block quotes, thematic
-  breaks, rich tables, pipe tables, practical inline Markdown-inspired MarkTeX
-  syntax, inline/display math, footnotes, citation placeholders, simple
-  conditionals, and page placeholders.
-- Add `--no-host` and JSON diagnostics.
-
 ## 22. Roadmap
 
 Planned work after 0.1:
 
 - external additive schema loading;
 - hardening rare MarkTeX fallback delimiter and container edge cases in the
-  private fallback parser;
+  private fallback layer;
 - backend lowering for scope-driven typography;
 - fuller APA/MLA/Chicago bibliography rule coverage;
 - symbolic inline arithmetic such as `PAGE.TOTAL - PAGE.CURRENT`;

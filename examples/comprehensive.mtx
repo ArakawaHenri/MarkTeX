@@ -16,18 +16,22 @@ $$$
 
 # [$ title ]
 
-Prepared by [$ author ]. This page is [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ].
+Prepared by [$ author ].
+This page is [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ].
 
-This paragraph covers *emphasis*, **strong text**, `inline code`, a
-[project link](https://example.com/marktex), an image placeholder
-![MarkTeX logo](assets/logo.pdf), a footnote reference[^overview], and a citation
+This paragraph covers *emphasis*, **strong text**, `inline code`, a \
+[project link](https://example.com/marktex), an image placeholder \
+![MarkTeX logo](assets/logo.pdf), a footnote reference[^overview], and a citation \
 reference [^ cite: Knuth84, pages=12-15 ].
 
 This paragraph spans
 two physical source lines, which tests MarkTeX physical line breaks.
 
-This paragraph uses backslash line continuation\
+This paragraph uses backslash line continuation \
 to join two source lines without inserting space.
+
+Escaped control characters stay literal: \# is not a heading, \*not emphasis\*, \
+and an escaped citation keyword is a footnote[^\cite: Knuth84].
 
 Inline math is MarkTeX syntax, so $E = mc^2$ lowers through the core AST.
 
@@ -49,14 +53,18 @@ close are visible in EIR state logs.
 
 !? [$ show_extra ]
 This concrete conditional branch is selected.
+
 !?!? [$ False ]
 This else-if branch is not selected.
+
 !?!
 This else branch is not selected.
+
 !!?
 
 !? [$ PAGE.CURRENT == PAGE.TOTAL ]
 This symbolic page conditional lowers to a LuaLaTeX page/last-page test.
+
 !!?
 
 !!@ body
@@ -79,7 +87,7 @@ print("Current page placeholder: [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ]")
 Feature | Example | Status
 Inline markup | *em* and **strong** | [$ status ]
 Literal pipe | A \| B | escaped
-Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
+Reference | A reference[^ cite: Turing36 ] and footnote[^table-note] | styled
 +++
 
 ## MarkTeX Fallback Blocks
@@ -110,5 +118,6 @@ Reference | [^ cite: Turing36 ] and footnote[^table-note] | styled
 [^overview]: Footnotes are single-line definitions in MarkTeX 0.1.
 [^table-note]: Footnotes may be referenced from rich table cells.
 [^pipe-note]: Pipe table cells use the same deferred footnote lowering.
+[^\cite: Knuth84]: Escaped citation keywords fall back to ordinary footnotes.
 
 [project]: https://example.com/marktex
