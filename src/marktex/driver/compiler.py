@@ -27,6 +27,7 @@ from marktex.core import (
     ListBlock,
     ListItem,
     MarkTeXObject,
+    MathBlock,
     PageBreak,
     PageSetup,
     Paragraph,
@@ -66,6 +67,7 @@ from marktex.surface import (
     LinkReferenceDefinitionNode,
     ListBlockNode,
     ListItemNode,
+    MathBlockNode,
     ParagraphNode,
     RichTableNode,
     ScopeCloseNode,
@@ -730,6 +732,8 @@ class _SurfaceCoreBuilder:
                     body = node.body
                     parts = ()
                 append(CodeBlock(node.language, body, node.interpolated, node.origin, parts))
+            elif isinstance(node, MathBlockNode):
+                append(MathBlock(node.body, node.origin))
             elif isinstance(node, RichTableNode):
                 append(self.table(node, refs))
             elif isinstance(node, ListBlockNode):
@@ -801,6 +805,7 @@ CORE_BLOCK_TYPES = (
     Paragraph,
     Heading,
     CodeBlock,
+    MathBlock,
     Table,
     ListBlock,
     BlockQuote,

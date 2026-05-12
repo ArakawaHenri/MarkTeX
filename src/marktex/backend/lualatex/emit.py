@@ -21,11 +21,13 @@ from marktex.core import (
     Image,
     InlineCode,
     InlineExpression,
+    InlineMath,
     InlineNode,
     LineBreak,
     Link,
     ListBlock,
     ListItem,
+    MathBlock,
     PageBreak,
     PageSetup,
     Paragraph,
@@ -129,6 +131,8 @@ class LuaLaTeXEmitter:
             return [self.heading_command(block.level, block.children)]
         if isinstance(block, CodeBlock):
             return self.emit_code_block(block)
+        if isinstance(block, MathBlock):
+            return self.emit_math_block(block)
         if isinstance(block, Table):
             return self.emit_table(block)
         if isinstance(block, ListBlock):
@@ -163,6 +167,12 @@ class LuaLaTeXEmitter:
             *(r"\noindent\strut " + line + r"\par" for line in lines),
             r"\endgroup",
         ]
+
+    def emit_math_block(self, block: MathBlock) -> list[str]:
+        body = block.body.rstrip("\n")
+        if not body:
+            return [r"\[", r"\]"]
+        return [r"\[", *body.split("\n"), r"\]"]
 
     def emit_code_part(self, part: CodePart) -> str:
         if isinstance(part, CodeText):
@@ -314,6 +324,8 @@ class LuaLaTeXEmitter:
             ) + "}"
         if isinstance(node, InlineCode):
             return r"\texttt{" + escape_plain_latex(node.value) + "}"
+        if isinstance(node, InlineMath):
+            return r"\(" + node.body + r"\)"
         if isinstance(node, LineBreak):
             return r"\\" if node.hard else " "
         if isinstance(node, Link):

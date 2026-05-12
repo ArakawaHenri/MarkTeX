@@ -1,4 +1,5 @@
-!# layout: A4, landscape
+!# layout: \
+A4, landscape
 !# margin: top=24mm, bottom=20mm
 !# bib: references.bib
 !# bib+: supplemental.bib
@@ -27,6 +28,12 @@ two physical source lines, which tests MarkTeX physical line breaks.
 
 This paragraph uses backslash line continuation\
 to join two source lines without inserting space.
+
+Inline math is MarkTeX syntax, so $E = mc^2$ lowers through the core AST.
+
+$$
+a^2 + b^2 = c^2
+$$
 
 これは日本語と English mixed text です。LuaLaTeX-oriented output keeps CJK text in the document.
 

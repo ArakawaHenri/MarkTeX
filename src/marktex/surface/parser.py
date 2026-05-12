@@ -11,6 +11,7 @@ from marktex.surface.model import (
     DocumentDirectiveNode,
     FootnoteDefinitionNode,
     HostBlockNode,
+    MathBlockNode,
     RichTableNode,
     ScopeCloseNode,
     ScopeOpenNode,
@@ -48,6 +49,12 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
             flush_fallback()
             host_node, index, offset = parse_host_block(lines, index, offset, source, filename)
             nodes.append(host_node)
+            continue
+
+        if stripped_newline == "$$":
+            flush_fallback()
+            math_node, index, offset = parse_math_block(lines, index, offset, source, filename)
+            nodes.append(math_node)
             continue
 
         footnote = FOOTNOTE_DEFINITION_RE.match(stripped_newline)
@@ -101,26 +108,38 @@ def parse_surface(source: str, *, filename: str) -> SurfaceDocument:
 
         if stripped_newline.startswith("!#"):
             flush_fallback()
+            payload, origin, index, offset = collect_control_payload(
+                lines,
+                index,
+                offset,
+                prefix_length=2,
+                source=source,
+                filename=filename,
+            )
             nodes.append(
                 DocumentDirectiveNode(
-                    stripped_newline[2:].lstrip(),
-                    span(filename, line_start, line_start + len(stripped_newline), source),
+                    payload,
+                    origin,
                 )
             )
-            index += 1
-            offset += len(line)
             continue
 
         if stripped_newline.startswith("!@"):
             flush_fallback()
+            payload, origin, index, offset = collect_control_payload(
+                lines,
+                index,
+                offset,
+                prefix_length=2,
+                source=source,
+                filename=filename,
+            )
             nodes.append(
                 ScopeOpenNode(
-                    stripped_newline[2:].lstrip(),
-                    span(filename, line_start, line_start + len(stripped_newline), source),
+                    payload,
+                    origin,
                 )
             )
-            index += 1
-            offset += len(line)
             continue
 
         fallback.append(FallbackLine.from_source_line(line, line_start))
@@ -204,6 +223,67 @@ def parse_host_block(
         offset += len(line)
         index += 1
     raise MarkTeXError("unclosed host block", span(filename, start_offset, start_offset, source))
+
+
+def parse_math_block(
+    lines: list[str],
+    index: int,
+    offset: int,
+    source: str,
+    filename: str,
+) -> tuple[MathBlockNode, int, int]:
+    start_offset = offset
+    index += 1
+    offset += len(lines[index - 1])
+    body: list[str] = []
+    while index < len(lines):
+        line = lines[index]
+        if line.rstrip("\n") == "$$":
+            offset += len(line)
+            index += 1
+            return (
+                MathBlockNode("".join(body), span(filename, start_offset, offset, source)),
+                index,
+                offset,
+            )
+        body.append(line)
+        offset += len(line)
+        index += 1
+    raise MarkTeXError("unclosed math block", span(filename, start_offset, start_offset, source))
+
+
+def collect_control_payload(
+    lines: list[str],
+    index: int,
+    offset: int,
+    *,
+    prefix_length: int,
+    source: str,
+    filename: str,
+) -> tuple[str, SourceSpan, int, int]:
+    start_offset = offset
+    pieces: list[str] = []
+    first = True
+    end_offset = offset
+
+    while index < len(lines):
+        line = lines[index]
+        text = line.rstrip("\n")
+        line_start = offset
+        payload = text[prefix_length:] if first else text
+        if first:
+            payload = payload.lstrip()
+        first = False
+
+        continuing = line.endswith("\n") and text.endswith("\\") and index + 1 < len(lines)
+        pieces.append(payload + ("\n" if continuing else ""))
+        end_offset = line_start + len(text)
+        index += 1
+        offset += len(line)
+        if not continuing:
+            break
+
+    return "".join(pieces), span(filename, start_offset, end_offset, source), index, offset
 
 
 def parse_rich_table(

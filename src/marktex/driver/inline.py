@@ -8,6 +8,7 @@ from marktex.core import (
     Image,
     InlineCode,
     InlineExpression,
+    InlineMath,
     InlineNode,
     LineBreak,
     Link,
@@ -79,6 +80,7 @@ class _InlineParser:
                 or self.parse_strikethrough(cursor, end)
                 or self.parse_strong(cursor, end)
                 or self.parse_emphasis(cursor, end)
+                or self.parse_inline_math(cursor, end)
             )
             if parsed is not None:
                 node, cursor = parsed
@@ -124,12 +126,12 @@ class _InlineParser:
         if not self.text.startswith("[", cursor):
             return None
         if self.text.startswith("[^", cursor):
-            close = self.text.find("]", cursor + 2, end)
+            close = self.text.find("]", cursor + 2, self.physical_line_end(cursor, end))
             if close == -1:
                 return None
             return reference_node(self.text[cursor + 2 : close], self.token_span(cursor, close + 1)), close + 1
         if self.text.startswith("[$", cursor):
-            expr_close = self.find_closing_bracket(cursor, end)
+            expr_close = self.find_closing_bracket(cursor, self.physical_line_end(cursor, end))
             if expr_close is None:
                 return None
             expr = self.text[cursor + 2 : expr_close].strip()
@@ -216,6 +218,14 @@ class _InlineParser:
             return None
         return Emphasis(self.parse_child(cursor + 1, close), self.token_span(cursor, close + 1)), close + 1
 
+    def parse_inline_math(self, cursor: int, end: int) -> tuple[InlineNode, int] | None:
+        if not self.is_single_dollar(cursor, end):
+            return None
+        close = self.find_closing_math_dollar(cursor + 1, self.physical_line_end(cursor, end))
+        if close is None:
+            return None
+        return InlineMath(self.text[cursor + 1 : close], self.token_span(cursor, close + 1)), close + 1
+
     def link_target_after(self, label_end: int, end: int) -> tuple[str, int] | None:
         if label_end + 1 >= end or self.text[label_end + 1] != "(":
             return None
@@ -296,6 +306,27 @@ class _InlineParser:
             cursor += 1
         return None
 
+    def find_closing_math_dollar(self, cursor: int, end: int) -> int | None:
+        while cursor < end:
+            if self.text[cursor] == "\\":
+                cursor += 2
+                continue
+            if self.is_single_dollar(cursor, end):
+                return cursor
+            cursor += 1
+        return None
+
+    def is_single_dollar(self, cursor: int, end: int) -> bool:
+        return (
+            self.text[cursor] == "$"
+            and (cursor == 0 or self.text[cursor - 1] != "$")
+            and (cursor + 1 >= end or self.text[cursor + 1] != "$")
+        )
+
+    def physical_line_end(self, cursor: int, end: int) -> int:
+        line_end = self.text.find("\n", cursor, end)
+        return end if line_end == -1 else line_end
+
     def next_special(self, cursor: int, end: int) -> int:
         while cursor < end and self.text[cursor] not in INLINE_SPECIAL_CHARS:
             cursor += 1
@@ -314,7 +345,7 @@ class _InlineParser:
         )
 
 
-INLINE_SPECIAL_CHARS = set("\\\n![`*_~")
+INLINE_SPECIAL_CHARS = set("\\\n![`*_~$")
 
 
 def normalize_link_destination(raw: str) -> str:

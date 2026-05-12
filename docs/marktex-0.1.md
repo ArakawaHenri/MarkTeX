@@ -66,8 +66,10 @@ not a global function.
 | `!@` and `!!@` scope events | Supported in state/EIR |
 | Python `$$$` host blocks | Supported for trusted input |
 | Inline `[$ ... ]` expressions | Supported |
+| Inline `$...$` math | Supported as MarkTeX inline syntax |
+| Display `$$` math blocks | Supported as MarkTeX block syntax |
 | `PAGE.CURRENT` and `PAGE.TOTAL` placeholders | Supported inline and in `$` code fences |
-| Complex symbolic inline math | Diagnostic in LuaLaTeX backend |
+| Complex symbolic inline expressions | Diagnostic in LuaLaTeX backend |
 | Headings and paragraphs | Supported |
 | Markdown-derived MarkTeX fallback syntax | Supported practical subset |
 | Ordinary and `$`-interpolated code fences | Supported subset |
@@ -236,13 +238,14 @@ Recognition order:
 
 1. Backtick code fences beginning with `` ``` ``.
 2. Host blocks beginning with `$$$`.
-3. Footnote definitions.
-4. Rich tables beginning with `+++`.
-5. Conditional controls.
-6. Scope close `!!@`.
-7. Document directive `!#`.
-8. Scope open `!@`.
-9. MarkTeX fallback blocks and inline content.
+3. Display math blocks delimited by column-one `$$` lines.
+4. Footnote definitions.
+5. Rich tables beginning with `+++`.
+6. Conditional controls.
+7. Scope close `!!@`.
+8. Document directive `!#`.
+9. Scope open `!@`.
+10. MarkTeX fallback blocks and inline content.
 
 `!!@` must be checked before `!@`, and `!?!?` before `!?`, because these forms
 share prefixes.
@@ -258,6 +261,7 @@ Line-start controls:
 !?!   conditional else
 !!?   conditional end
 $$$   host block fence
+$$    display math fence, only when the whole physical line is exactly $$
 +++   rich table fence if length is at least 3 plus signs
 ```
 
@@ -295,6 +299,12 @@ Rules:
   matches inside it are inactive.
 - Only call heads and parameter names are trimmed for matching.
 - Values are not trimmed by the parser.
+
+For line-start `!#` and `!@` controls, the surface parser collects physical
+continuation lines before passing the payload to MOS. For example,
+`!# layout: \` followed by `A4` is equivalent to `!# layout: A4`.
+Conditions remain line-local because their payload is a `[$ ... ]` host
+expression, not a MOS value.
 
 Examples:
 
@@ -662,6 +672,7 @@ unclaimed text chunks are parsed and converted directly to MarkTeX AST.
 - inline emphasis `*text*` and `_text_`;
 - inline strong `**text**` and `__text__`;
 - inline code `` `text` ``;
+- inline math `$x+y$`;
 - strikethrough `~~text~~`;
 - links `[label](url)`;
 - images `![alt](src)`;
@@ -687,6 +698,26 @@ A physical newline inside a paragraph is a MarkTeX hard line break. A backslash
 immediately followed by a physical newline is line continuation and contributes
 nothing. This intentionally differs from Markdown's soft/hard break rules:
 spaces are ordinary text characters in MarkTeX.
+
+Inline MarkTeX delimiter forms are physical-line local. `[$ ... ]` host
+expressions and `$...$` inline math must open and close on the same physical
+line. A failed form is ordinary text; line continuation in that ordinary text
+does not trigger a second inline parse pass. Therefore `[$ x\` followed by
+`y ]` and `$x\` followed by `y$` are text, not expressions or math. Inside
+math, the body is raw target math text and MarkTeX inline parsing is inactive.
+
+Display math uses column-one fence lines:
+
+```marktex
+$$
+a^2 + b^2 = c^2
+$$
+```
+
+The opening and closing lines must be exactly `$$`. Indented `$$`, `$$ x $$`,
+or a line with trailing spaces is ordinary fallback text. Display math body is
+owned by the math language, so MarkTeX backslash continuation and inline
+parsing do not apply inside it.
 
 Reference-style link and image definitions are MarkTeX fallback declarations,
 not a Markdown global pre-scan. Root definitions are visible to root content
@@ -908,6 +939,7 @@ Emphasis
 Strong
 Strikethrough
 InlineCode
+InlineMath
 LineBreak
 Link
 Image
@@ -918,6 +950,7 @@ Heading
 CodeText
 CodeExpression
 CodeBlock
+MathBlock
 Table
 ListBlock
 ListItem
@@ -987,6 +1020,8 @@ Lowering support:
 - strong -> `\textbf`;
 - strikethrough -> `\sout` with `ulem` loaded only when needed;
 - inline code -> `\texttt`;
+- inline math -> `\(...\)` with raw math body;
+- display math -> `\[...\]` with raw math body;
 - physical line breaks -> `\\`;
 - links -> `\href`;
 - images -> `\includegraphics`;
@@ -1067,6 +1102,7 @@ Examples that must fail:
 - symbolic value coerced to host boolean;
 - unclosed code fence;
 - unclosed host block;
+- unclosed math block;
 - unclosed rich table;
 - rich table row with wrong cell count;
 - pipe table row with wrong cell count;
@@ -1100,6 +1136,11 @@ Minimal document:
 # Hello
 
 This is *MarkTeX* page [$ PAGE.CURRENT ] of [$ PAGE.TOTAL ].
+Inline math is MarkTeX syntax too: $E = mc^2$.
+
+$$
+a^2 + b^2 = c^2
+$$
 ```
 
 Scoped event log:
@@ -1182,6 +1223,7 @@ Optional LuaLaTeX smoke when available:
 
 ```bash
 uv run mtxc examples/comprehensive.mtx --emit all --out-dir /tmp/marktex-comprehensive
+cp -R examples/assets /tmp/marktex-comprehensive/assets
 lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-comprehensive /tmp/marktex-comprehensive/comprehensive.tex
 lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-comprehensive /tmp/marktex-comprehensive/comprehensive.tex
 ```
@@ -1195,8 +1237,8 @@ lualatex -interaction=nonstopmode -halt-on-error -output-directory=/tmp/marktex-
 - Implement schema-driven MOS value shading.
 - Support headings, paragraphs, code fences, lists, block quotes, thematic
   breaks, rich tables, pipe tables, practical inline Markdown-derived MarkTeX
-  syntax, footnotes, citation placeholders, simple conditionals, and page
-  placeholders.
+  syntax, inline/display math, footnotes, citation placeholders, simple
+  conditionals, and page placeholders.
 - Add `--no-host` and JSON diagnostics.
 
 ## 22. Roadmap

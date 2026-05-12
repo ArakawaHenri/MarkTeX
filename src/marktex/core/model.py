@@ -85,6 +85,15 @@ class InlineCode:
 
 
 @dataclass(frozen=True)
+class InlineMath:
+    body: str
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {"kind": "inline_math", "body": self.body, "origin": _origin(self.origin)}
+
+
+@dataclass(frozen=True)
 class LineBreak:
     hard: bool
     origin: SourceSpan | None = None
@@ -154,6 +163,7 @@ InlineNode: TypeAlias = (
     | Strong
     | Strikethrough
     | InlineCode
+    | InlineMath
     | LineBreak
     | Link
     | Image
@@ -234,6 +244,15 @@ class CodeBlock:
             "parts": [part.to_json() for part in self.parts],
             "origin": _origin(self.origin),
         }
+
+
+@dataclass(frozen=True)
+class MathBlock:
+    body: str
+    origin: SourceSpan | None = None
+
+    def to_json(self) -> dict[str, object]:
+        return {"kind": "math_block", "body": self.body, "origin": _origin(self.origin)}
 
 
 @dataclass(frozen=True)
@@ -416,6 +435,7 @@ Block: TypeAlias = (
     Paragraph
     | Heading
     | CodeBlock
+    | MathBlock
     | Table
     | ListBlock
     | BlockQuote

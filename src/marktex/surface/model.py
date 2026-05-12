@@ -70,6 +70,12 @@ class CodeFenceNode:
 
 
 @dataclass(frozen=True)
+class MathBlockNode:
+    body: str
+    origin: SourceSpan
+
+
+@dataclass(frozen=True)
 class RichTableNode:
     column_specs: tuple[str, ...]
     column_spec_kinds: tuple[str, ...]
@@ -123,6 +129,7 @@ SurfaceNode: TypeAlias = (
     | HeadingNode
     | ParagraphNode
     | CodeFenceNode
+    | MathBlockNode
     | RichTableNode
     | ListBlockNode
     | BlockQuoteNode

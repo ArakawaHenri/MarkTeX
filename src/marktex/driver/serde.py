@@ -19,11 +19,13 @@ from marktex.core import (
     Image,
     InlineCode,
     InlineExpression,
+    InlineMath,
     InlineNode,
     LineBreak,
     Link,
     ListBlock,
     ListItem,
+    MathBlock,
     PageBreak,
     PageSetup,
     Paragraph,
@@ -49,6 +51,7 @@ from marktex.surface import (
     LinkReferenceDefinitionNode,
     ListBlockNode,
     ListItemNode,
+    MathBlockNode,
     ParagraphNode,
     RichTableNode,
     ScopeCloseNode,
@@ -193,6 +196,8 @@ def block_from_json(payload: object) -> Block:
             span_from_json(payload.get("origin")),
             tuple(code_part_from_json(item) for item in as_list(payload.get("parts"))),
         )
+    if kind == "math_block":
+        return MathBlock(str(payload.get("body", "")), span_from_json(payload.get("origin")))
     if kind == "table":
         return Table(
             tuple(call_from_json(item) for item in as_list(payload.get("columns"))),
@@ -309,6 +314,8 @@ def inline_from_json(payload: object) -> InlineNode:
         )
     if kind == "inline_code":
         return InlineCode(str(payload.get("value", "")), span_from_json(payload.get("origin")))
+    if kind == "inline_math":
+        return InlineMath(str(payload.get("body", "")), span_from_json(payload.get("origin")))
     if kind == "line_break":
         return LineBreak(bool_value(payload.get("hard", False), "line break hard"), span_from_json(payload.get("origin")))
     if kind == "link":
@@ -427,6 +434,12 @@ def surface_node_to_json(node: SurfaceNode) -> dict[str, object]:
             "interpolated": node.interpolated,
             "origin": span_to_json(node.origin),
         }
+    if isinstance(node, MathBlockNode):
+        return {
+            "kind": "math_block",
+            "body": node.body,
+            "origin": span_to_json(node.origin),
+        }
     if isinstance(node, RichTableNode):
         return {
             "kind": "rich_table",
@@ -526,6 +539,8 @@ def surface_node_from_json(payload: object) -> SurfaceNode:
             bool_value(payload.get("interpolated", False), "code fence interpolated"),
             origin,
         )
+    if kind == "math_block":
+        return MathBlockNode(str(payload.get("body", "")), origin)
     if kind == "rich_table":
         return RichTableNode(
             tuple(str(item) for item in as_list(payload.get("column_specs"))),
@@ -635,6 +650,7 @@ INLINE_KINDS = {
     "strong",
     "strikethrough",
     "inline_code",
+    "inline_math",
     "line_break",
     "link",
     "image",
@@ -645,6 +661,7 @@ BLOCK_KINDS = {
     "paragraph",
     "heading",
     "code_block",
+    "math_block",
     "table",
     "list",
     "blockquote",

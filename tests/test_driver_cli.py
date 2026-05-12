@@ -577,6 +577,134 @@ class DriverTests(unittest.TestCase):
         self.assertIn(r"\texttt{code}", build.target_text)
         self.assertIn(r"\href{https://example.com}{site}", build.target_text)
 
+    def test_inline_math_lowers_after_marktex_inline_syntax(self) -> None:
+        build = build_document(
+            'Value $x+y$ and host [$ "$" ] with code `$z$`.\n',
+            filename="test.mtx",
+        )
+        paragraph = build.document.blocks[0].to_json()
+        kinds = [child["kind"] for child in paragraph["children"]]
+        self.assertIn("inline_math", kinds)
+        self.assertIn("inline_expr", kinds)
+        self.assertIn("inline_code", kinds)
+        self.assertIn(r"\(x+y\)", build.target_text)
+        self.assertIn(r"\$", build.target_text)
+        self.assertIn(r"\texttt{\$z\$}", build.target_text)
+
+    def test_unclosed_and_escaped_inline_math_are_plain_text(self) -> None:
+        build = build_document(r"Price \$5 and $open." "\n", filename="test.mtx")
+        paragraph = build.document.blocks[0].to_json()
+        self.assertNotIn("inline_math", [child["kind"] for child in paragraph["children"]])
+        self.assertIn(r"Price \$5 and \$open.", build.target_text)
+
+    def test_inline_math_dollar_delimiter_edge_cases(self) -> None:
+        build = build_document(
+            r"Math $a \$ b$ and double $$ stays text."
+            "\n",
+            filename="test.mtx",
+        )
+        paragraph = build.document.blocks[0].to_json()
+        math_nodes = [child for child in paragraph["children"] if child["kind"] == "inline_math"]
+        self.assertEqual([node["body"] for node in math_nodes], [r"a \$ b"])
+        self.assertIn(r"Math \(a \$ b\) and double \$\$ stays text.", build.target_text)
+
+    def test_inline_math_does_not_reparse_host_expression_result(self) -> None:
+        build = build_document('Host [$ "$x$" ] and math $x$.\n', filename="test.mtx")
+        paragraph = build.document.blocks[0].to_json()
+        kinds = [child["kind"] for child in paragraph["children"]]
+        self.assertEqual(kinds.count("inline_expr"), 1)
+        self.assertEqual(kinds.count("inline_math"), 1)
+        self.assertIn(r"Host \$x\$ and math \(x\).", build.target_text)
+
+    def test_inline_host_and_math_do_not_cross_physical_lines(self) -> None:
+        build = build_document(
+            "[$ 'hel\\\n"
+            "lo' ]\n"
+            "$hel\\\n"
+            "lo$\n",
+            filename="test.mtx",
+        )
+        paragraph = build.document.blocks[0].to_json()
+        kinds = [child["kind"] for child in paragraph["children"]]
+        self.assertNotIn("inline_expr", kinds)
+        self.assertNotIn("inline_math", kinds)
+        self.assertIn(r"[\$ 'hello' ]", build.target_text)
+        self.assertIn(r"\$hello\$", build.target_text)
+
+    def test_reference_delimiter_does_not_cross_physical_line(self) -> None:
+        build = build_document(
+            "[^note\\\n"
+            "]\n\n"
+            "[^note]: Real note.\n",
+            filename="test.mtx",
+        )
+        paragraph = build.document.blocks[0].to_json()
+        self.assertNotIn("footnote_ref", [child["kind"] for child in paragraph["children"]])
+        self.assertIn(r"[\textasciicircum{}note]", build.target_text)
+        self.assertNotIn(r"\footnote{Real note.}", build.target_text)
+
+    def test_display_math_block_lowers_raw_body(self) -> None:
+        build = build_document(
+            "$$\n"
+            "some_\\\n"
+            "latex\n"
+            "$$\n",
+            filename="test.mtx",
+        )
+        self.assertEqual(build.document.blocks[0].to_json()["kind"], "math_block")
+        self.assertIn("\\[\nsome_\\\nlatex\n\\]", build.target_text)
+
+    def test_display_math_body_keeps_owned_language_text_raw(self) -> None:
+        build = build_document(
+            "$$\n"
+            "[$ PAGE.CURRENT ]\n"
+            "x\\\n"
+            "y\n"
+            "$$\n",
+            filename="test.mtx",
+        )
+        block = build.document.blocks[0].to_json()
+        self.assertEqual(block["kind"], "math_block")
+        self.assertEqual(block["body"], "[$ PAGE.CURRENT ]\nx\\\ny\n")
+        self.assertIn("[$ PAGE.CURRENT ]\nx\\\ny", build.target_text)
+        self.assertNotIn(r"\thepage{}", build.target_text)
+
+    def test_display_math_requires_exact_column_one_marker(self) -> None:
+        indented = build_document("  $$\nx\n  $$\n", filename="test.mtx")
+        same_line = build_document("$$ x $$\n", filename="test.mtx")
+        trailing_space = build_document("$$ \nx\n$$ \n", filename="test.mtx")
+        self.assertNotEqual(indented.document.blocks[0].to_json()["kind"], "math_block")
+        self.assertNotEqual(same_line.document.blocks[0].to_json()["kind"], "math_block")
+        self.assertNotEqual(trailing_space.document.blocks[0].to_json()["kind"], "math_block")
+        with self.assertRaisesRegex(MarkTeXError, "unclosed math block"):
+            build_document("$$\nx\n", filename="test.mtx")
+
+    def test_control_mos_payload_supports_line_continuation(self) -> None:
+        build = build_document("!# layout: \\\nA4\nHello\n", filename="test.mtx")
+        self.assertIn(r"\usepackage[paperwidth=210mm,paperheight=297mm]{geometry}", build.target_text)
+
+    def test_condition_payload_does_not_use_mos_line_continuation(self) -> None:
+        with self.assertRaisesRegex(MarkTeXError, r"conditional condition must be a \[\$ \.\.\. \]"):
+            build_document(
+                "!? [$ True \\\n"
+                "]\n"
+                "Visible\n"
+                "!!?\n",
+                filename="test.mtx",
+            )
+
+    def test_host_fence_wins_over_display_math_prefix(self) -> None:
+        build = build_document(
+            "$$$python\n"
+            'value = "a" \\\n'
+            '    "b"\n'
+            "$$$\n"
+            "[$ value ]\n",
+            filename="test.mtx",
+        )
+        self.assertEqual(build.document.blocks[0].to_json()["children"][0]["value"], "ab")
+        self.assertNotIn("math_block", [block.to_json()["kind"] for block in build.document.blocks])
+
     def test_image_fallback_lowers(self) -> None:
         build = build_document("Logo ![MarkTeX](logo.png).\n", filename="test.mtx")
         self.assertIn(r"\includegraphics{logo.png}", build.target_text)
@@ -1617,10 +1745,12 @@ class RuntimeApiTests(unittest.TestCase):
             Heading,
             Image,
             InlineCode,
+            InlineMath,
             LineBreak,
             Link,
             ListBlock,
             ListItem,
+            MathBlock,
             Paragraph,
             Strikethrough,
             Strong,
@@ -1635,6 +1765,7 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertIsInstance(runtime.strong("bold"), Strong)
         self.assertIsInstance(runtime.strikethrough("strike"), Strikethrough)
         self.assertIsInstance(runtime.inline_code("code"), InlineCode)
+        self.assertIsInstance(runtime.inline_math("x+y"), InlineMath)
         self.assertIsInstance(runtime.line_break(), LineBreak)
         self.assertIsInstance(runtime.link("https://x.com", "label"), Link)
         self.assertIsInstance(runtime.image("alt", "img.pdf"), Image)
@@ -1645,6 +1776,7 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertIsInstance(lb, ListBlock)
         bq = runtime.blockquote(runtime.paragraph("quoted"))
         self.assertIsInstance(bq, BlockQuote)
+        self.assertIsInstance(runtime.math_block("x+y"), MathBlock)
 
     def test_session_document_method_returns_canonical_document(self) -> None:
         from marktex.core import Document
@@ -1718,6 +1850,9 @@ class SerdeRoundTripTests(unittest.TestCase):
 
     def test_task_list_item_checked_round_trip(self) -> None:
         self._round_trip("- [x] Done\n- [ ] Todo\n")
+
+    def test_math_nodes_round_trip(self) -> None:
+        self._round_trip("Inline $x+y$.\n\n$$\na^2+b^2=c^2\n$$\n")
 
 
 if __name__ == "__main__":

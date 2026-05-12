@@ -17,11 +17,13 @@ from marktex.core import (
     Image,
     InlineCode,
     InlineExpression,
+    InlineMath,
     InlineNode,
     LineBreak,
     Link,
     ListBlock,
     ListItem,
+    MathBlock,
     PageBreak,
     PageSetup,
     Paragraph,
@@ -131,6 +133,12 @@ class RuntimeSession:
     def footnote_definition(self, label: str, *children: object) -> FootnoteDefinition:
         return footnote_definition(label, *children)
 
+    def inline_math(self, body: str) -> InlineMath:
+        return inline_math(body)
+
+    def math_block(self, body: str) -> MathBlock:
+        return math_block(body)
+
 
 def value_to_mos(value: object) -> MosValue:
     if isinstance(value, CallUnit | RawString | TupleValue):
@@ -221,6 +229,10 @@ def code_block(
     return CodeBlock(language, body, interpolated=interpolated, parts=tuple(parts))
 
 
+def math_block(body: str) -> MathBlock:
+    return MathBlock(body)
+
+
 def table(
     columns: tuple[CallUnit, ...],
     header: tuple[tuple[InlineNode, ...], ...],
@@ -255,6 +267,10 @@ def strikethrough(*children: object) -> Strikethrough:
 
 def inline_code(value: str) -> InlineCode:
     return InlineCode(value)
+
+
+def inline_math(body: str) -> InlineMath:
+    return InlineMath(body)
 
 
 def line_break(*, hard: bool = True) -> LineBreak:
@@ -328,6 +344,7 @@ def inline_node(value: object) -> InlineNode:
         | Strong
         | Strikethrough
         | InlineCode
+        | InlineMath
         | LineBreak
         | Link
         | Image
