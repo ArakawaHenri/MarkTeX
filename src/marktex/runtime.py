@@ -360,7 +360,7 @@ def document_from_surface_artifact(
     *,
     no_host: bool = False,
 ) -> Document:
-    from marktex.driver.compiler import document_from_surface_artifact as build_from_surface
+    from marktex.driver.surface_to_core import document_from_surface_artifact as build_from_surface
 
     return build_from_surface(artifact, no_host=no_host)
 
