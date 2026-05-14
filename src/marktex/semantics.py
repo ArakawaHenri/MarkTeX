@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, Mapping
 
 from marktex.core import (
     Block,
@@ -28,22 +28,22 @@ from marktex.source import MarkTeXError, SourceSpan
 from marktex.surface.grammar import is_footnote_label
 
 
-PAGE_PAPER_SIZES = {
-    "a4paper": ("210mm", "297mm"),
-    "a5paper": ("148mm", "210mm"),
-    "letterpaper": ("8.5in", "11in"),
+@dataclass(frozen=True)
+class PageSizePreset:
+    height: str
+    width: str
+
+
+PAGE_SIZE_PRESETS: Mapping[str, PageSizePreset] = {
+    "A4": PageSizePreset(height="297mm", width="210mm"),
+    "A5": PageSizePreset(height="210mm", width="148mm"),
+    "Letter": PageSizePreset(height="11in", width="8.5in"),
 }
-PAPER_ALIASES = {
-    "a4": "a4paper",
-    "a4paper": "a4paper",
-    "a5": "a5paper",
-    "a5paper": "a5paper",
-    "letter": "letterpaper",
-    "letterpaper": "letterpaper",
-}
+DEFAULT_PAGE_SIZE = PAGE_SIZE_PRESETS["A4"]
+PAGE_SIZE_PRESET_LOOKUP = {key.casefold(): key for key in PAGE_SIZE_PRESETS}
 ORIENTATIONS = frozenset(("portrait", "landscape"))
 MARGIN_KEYS = frozenset(("top", "bottom", "left", "right"))
-LAYOUT_KWARGS = frozenset(("paper", "width", "height", "orientation", *MARGIN_KEYS))
+LAYOUT_KWARGS = frozenset(("width", "height", "orientation", *MARGIN_KEYS))
 TABLE_ALIGNMENTS = frozenset(("left", "center", "right"))
 DOCUMENT_RESOURCE_HEADS = frozenset(("bib", "bib+", "bib-"))
 DOCUMENT_STYLE_HEADS = frozenset(("bibstyle", "citestyle"))
@@ -60,6 +60,7 @@ DIMENSION_TO_PT = {
 }
 DocumentDirectiveBodyEffect = Literal["none", "page_break", "page_setup"]
 DocumentDirectiveEventPolicy = Literal["always", "before_content", "never"]
+LayoutOperationKind = Literal["size", "width", "height", "orientation", "margins"]
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,16 @@ class DocumentDirectiveResult:
     event_policy: DocumentDirectiveEventPolicy
 
 
+@dataclass(frozen=True)
+class LayoutOperation:
+    kind: LayoutOperationKind
+    origin: SourceSpan | None = None
+    width: str | None = None
+    height: str | None = None
+    orientation: str | None = None
+    margins: Mapping[str, str] | None = None
+
+
 DOCUMENT_DIRECTIVE_SPECS = {
     "layout": DocumentDirectiveSpec("page_setup", "before_content"),
     "margin": DocumentDirectiveSpec("page_setup", "before_content"),
@@ -90,8 +101,8 @@ DOCUMENT_DIRECTIVE_SPECS = {
 
 @dataclass(frozen=True)
 class PageLayout:
-    width: str = "210mm"
-    height: str = "297mm"
+    width: str = DEFAULT_PAGE_SIZE.width
+    height: str = DEFAULT_PAGE_SIZE.height
     margins: dict[str, str] | None = None
 
     def margin_dict(self) -> dict[str, str]:
@@ -137,12 +148,18 @@ def value_origin(value: object) -> SourceSpan | None:
     return getattr(value, "origin", None)
 
 
-def normalize_paper(raw: str, origin: SourceSpan | None = None) -> str:
-    return normalize_choice(raw, frozenset(PAGE_PAPER_SIZES), "paper", origin, aliases=PAPER_ALIASES)
+def normalize_page_size_preset(raw: str, origin: SourceSpan | None = None) -> str:
+    value = raw.strip()
+    preset = PAGE_SIZE_PRESET_LOOKUP.get(value.casefold())
+    if preset is not None:
+        return preset
+    expected = ", ".join(PAGE_SIZE_PRESETS)
+    raise MarkTeXError(f"unsupported page size preset: {value}; expected one of {expected}", origin)
 
 
-def paper_size(raw: str, origin: SourceSpan | None = None) -> tuple[str, str]:
-    return PAGE_PAPER_SIZES[normalize_paper(raw, origin)]
+def page_size(raw: str, origin: SourceSpan | None = None) -> tuple[str, str]:
+    preset = PAGE_SIZE_PRESETS[normalize_page_size_preset(raw, origin)]
+    return preset.width, preset.height
 
 
 def normalize_orientation(raw: str, origin: SourceSpan | None = None) -> str:
@@ -201,79 +218,146 @@ def apply_layout_call(call: CallUnit, layout: PageLayout) -> tuple[CallUnit, Pag
     if unknown:
         raise MarkTeXError(f"unknown layout kwargs: {', '.join(unknown)}", call.origin)
 
-    paper: tuple[str, str] | None = None
-    width: str | None = None
-    height: str | None = None
-    orientation: str | None = None
-    margins: dict[str, str] = {}
-
-    for arg in call.args:
-        arg_paper, arg_orientation = layout_arg(arg, call.origin)
-        if arg_paper is not None:
-            paper = arg_paper
-        if arg_orientation is not None:
-            orientation = arg_orientation
-
-    if "paper" in call.kwargs:
-        paper = paper_size(raw_text(call.kwargs["paper"], "paper", call.origin), value_origin(call.kwargs["paper"]))
-    if "width" in call.kwargs:
-        width = normalize_dimension(raw_text(call.kwargs["width"], "width", call.origin), "width", value_origin(call.kwargs["width"]))
-    if "height" in call.kwargs:
-        height = normalize_dimension(raw_text(call.kwargs["height"], "height", call.origin), "height", value_origin(call.kwargs["height"]))
-    if "orientation" in call.kwargs:
-        orientation = normalize_orientation(
-            raw_text(call.kwargs["orientation"], "orientation", call.origin),
-            value_origin(call.kwargs["orientation"]),
-        )
-    for key in MARGIN_KEYS:
-        if key in call.kwargs:
-            margins[key] = normalize_dimension(raw_text(call.kwargs[key], key, call.origin), key, value_origin(call.kwargs[key]))
-
     next_layout = layout
-    if paper is not None:
-        next_layout = next_layout.with_size(*paper)
-    if width is not None or height is not None:
-        next_layout = next_layout.with_size(width or next_layout.width, height or next_layout.height)
-    if orientation is not None:
-        next_layout = apply_orientation(next_layout, orientation, call.origin)
-    if margins:
-        next_layout = next_layout.with_margins(margins)
+    for operation in layout_operations(call):
+        next_layout = apply_layout_operation(next_layout, operation)
 
     return layout_call_from_state(next_layout, call.origin), next_layout
 
 
-def layout_arg(arg: MosValue, origin: SourceSpan | None) -> tuple[tuple[str, str] | None, str | None]:
+def layout_operations(call: CallUnit) -> tuple[LayoutOperation, ...]:
+    indexed_operations: list[tuple[int, int, LayoutOperation]] = []
+    fallback_index = 0
+
+    for arg in call.args:
+        for operation in layout_arg_operations(arg, call.origin):
+            indexed_operations.append((operation_sort_key(operation, fallback_index), fallback_index, operation))
+            fallback_index += 1
+
+    for key, value in call.kwargs.items():
+        operation = layout_kwarg_operation(key, value, call.origin)
+        indexed_operations.append((operation_sort_key(operation, fallback_index), fallback_index, operation))
+        fallback_index += 1
+
+    return tuple(operation for _, _, operation in sorted(indexed_operations))
+
+
+def operation_sort_key(operation: LayoutOperation, fallback: int) -> int:
+    if operation.origin is not None:
+        return operation.origin.start
+    return fallback
+
+
+def layout_kwarg_operation(key: str, value: MosValue, origin: SourceSpan | None) -> LayoutOperation:
+    value_span = value_origin(value)
+    if key == "width":
+        return LayoutOperation(
+            "width",
+            value_span,
+            width=normalize_dimension(raw_text(value, "width", origin), "width", value_span),
+        )
+    if key == "height":
+        return LayoutOperation(
+            "height",
+            value_span,
+            height=normalize_dimension(raw_text(value, "height", origin), "height", value_span),
+        )
+    if key == "orientation":
+        return LayoutOperation(
+            "orientation",
+            value_span,
+            orientation=normalize_orientation(raw_text(value, "orientation", origin), value_span),
+        )
+    if key in MARGIN_KEYS:
+        return LayoutOperation(
+            "margins",
+            value_span,
+            margins={
+                key: normalize_dimension(raw_text(value, key, origin), key, value_span),
+            },
+        )
+    raise MarkTeXError(f"unknown layout kwargs: {key}", origin)
+
+
+def layout_arg_operations(arg: MosValue, origin: SourceSpan | None) -> tuple[LayoutOperation, ...]:
     if isinstance(arg, RawString):
         text = arg.text.strip()
         try:
-            return paper_size(text, arg.origin), None
+            width, height = page_size(text, arg.origin)
+            return (LayoutOperation("size", arg.origin, width=width, height=height),)
         except MarkTeXError:
             try:
-                return None, normalize_orientation(text, arg.origin)
+                return (
+                    LayoutOperation(
+                        "orientation",
+                        arg.origin,
+                        orientation=normalize_orientation(text, arg.origin),
+                    ),
+                )
             except MarkTeXError as exc:
                 raise MarkTeXError(f"unsupported layout argument: {text}", arg.origin) from exc
     if isinstance(arg, CallUnit):
         unknown = sorted(set(arg.kwargs) - LAYOUT_KWARGS)
         if unknown:
             raise MarkTeXError(f"unknown layout kwargs: {', '.join(unknown)}", arg.origin or origin)
-        if "paper" in arg.kwargs:
-            return paper_size(raw_text(arg.kwargs["paper"], "paper", arg.origin), value_origin(arg.kwargs["paper"])), None
-        if "orientation" in arg.kwargs:
-            return None, normalize_orientation(
-                raw_text(arg.kwargs["orientation"], "orientation", arg.origin),
-                value_origin(arg.kwargs["orientation"]),
+        if arg.args:
+            raise MarkTeXError("unsupported nested layout argument", arg.origin or origin)
+        if set(arg.kwargs) == {"width", "height"}:
+            width_origin = value_origin(arg.kwargs["width"])
+            height_origin = value_origin(arg.kwargs["height"])
+            return (
+                LayoutOperation(
+                    "size",
+                    arg.origin,
+                    width=normalize_dimension(raw_text(arg.kwargs["width"], "width", arg.origin), "width", width_origin),
+                    height=normalize_dimension(
+                        raw_text(arg.kwargs["height"], "height", arg.origin),
+                        "height",
+                        height_origin,
+                    ),
+                ),
             )
         if arg.kwargs:
-            raise MarkTeXError("unsupported nested layout argument", arg.origin or origin)
+            operations = tuple(layout_kwarg_operation(key, value, arg.origin or origin) for key, value in arg.kwargs.items())
+            return operations
         if arg.head:
             try:
-                return paper_size(arg.head, arg.origin), None
+                width, height = page_size(arg.head, arg.origin)
+                return (LayoutOperation("size", arg.origin, width=width, height=height),)
             except MarkTeXError:
                 try:
-                    return None, normalize_orientation(arg.head, arg.origin)
+                    return (
+                        LayoutOperation(
+                            "orientation",
+                            arg.origin,
+                            orientation=normalize_orientation(arg.head, arg.origin),
+                        ),
+                    )
                 except MarkTeXError as exc:
                     raise MarkTeXError(f"unsupported layout argument: {arg.head}", arg.origin or origin) from exc
     raise MarkTeXError("unsupported layout argument", value_origin(arg) or origin)
+
+
+def apply_layout_operation(layout: PageLayout, operation: LayoutOperation) -> PageLayout:
+    if operation.kind == "size":
+        if operation.width is None or operation.height is None:
+            raise MarkTeXError("internal layout size operation is incomplete", operation.origin)
+        return layout.with_size(operation.width, operation.height)
+    if operation.kind == "width":
+        if operation.width is None:
+            raise MarkTeXError("internal layout width operation is incomplete", operation.origin)
+        return layout.with_size(operation.width, layout.height)
+    if operation.kind == "height":
+        if operation.height is None:
+            raise MarkTeXError("internal layout height operation is incomplete", operation.origin)
+        return layout.with_size(layout.width, operation.height)
+    if operation.kind == "orientation":
+        if operation.orientation is None:
+            raise MarkTeXError("internal layout orientation operation is incomplete", operation.origin)
+        return apply_orientation(layout, operation.orientation, operation.origin)
+    if operation.kind == "margins":
+        return layout.with_margins(dict(operation.margins or {}))
+    raise MarkTeXError(f"unknown layout operation: {operation.kind}", operation.origin)
 
 
 def apply_margin_call(call: CallUnit, layout: PageLayout) -> tuple[CallUnit, PageLayout]:

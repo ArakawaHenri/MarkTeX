@@ -353,15 +353,15 @@ MOS itself still passes values as raw strings. Finite option domains are checked
 by the semantic function that consumes the call. That consumer trims and
 normalizes a lookup copy, then accepts only its declared values.
 
-Schema may also shade a raw value into a no-argument nested call unit before
-semantic execution.
+Schema may also shade a raw value into a nested call unit before semantic
+execution.
 
 Rule:
 
 1. Keep the raw value text.
 2. Trim only a lookup copy.
 3. If the current value context has a matching `ShadeSpec`, replace the value
-   with that no-argument call unit.
+   with that call unit.
 4. Otherwise preserve the original raw string and let the semantic consumer
    decide whether it is valid.
 
@@ -372,8 +372,8 @@ Built-in examples:
 ```
 
 resolves through schema data into layout value calls with payloads such as
-`paper="a4paper"` and `orientation="landscape"`. Removing `A4` from schema data
-does not change MOS parsing; it only changes resolution.
+`width="210mm", height="297mm"` and `orientation="landscape"`. Removing `A4`
+from schema data does not change MOS parsing; it only changes resolution.
 
 Forced raw literals disable schema shading, not semantic validation:
 
@@ -382,7 +382,7 @@ Forced raw literals disable schema shading, not semantic validation:
 ```
 
 passes the raw string `A4`. The `layout` semantic function may still accept that
-literal because it owns paper-name normalization.
+literal because it owns page-size preset normalization.
 
 ## 7. Document Directives
 
@@ -444,21 +444,22 @@ citestyle
 newpage
 ```
 
-`layout` accepts paper aliases (`A4`, `A5`, `Letter`, or
-`paper=a4paper|a5paper|letterpaper`), explicit `width=` / `height=`, optional
-`orientation=portrait|landscape`, and margin keys `top`, `bottom`, `left`, and
-`right`. In one call, size is applied first, then orientation, then margins:
+`layout` accepts page-size presets (`A4`, `A5`, `Letter`), explicit `width=` /
+`height=`, optional `orientation=portrait|landscape`, and margin keys `top`,
+`bottom`, `left`, and `right`. Parameters take effect in source order:
 
 ```marktex
-!# layout: paper=A4, orientation=landscape, top=20mm
+!# layout: A4, orientation=landscape, top=20mm
 !# layout: width=100mm, height=200mm, orientation=landscape
+!# layout: orientation=landscape, A4
 ```
 
-Paper aliases set width and height with portrait defaults. Orientation is an
-atomic transform on the current page size: if the current width/height already
-match the requested orientation it does nothing; otherwise it transposes width
-and height. All canonical layout events store explicit `width` and `height`,
-not backend-specific paper names.
+Page-size presets are atomic width/height operations with portrait defaults.
+`width=` and `height=` update one dimension of the current page size.
+Orientation is an atomic transform on the current page size: if the current
+width/height already match the requested orientation it does nothing; otherwise
+it transposes width and height. All canonical layout events store explicit
+`width` and `height`.
 
 The LuaLaTeX backend lowers initial layout events to `geometry` package options
 and body `PageSetup` blocks to `\clearpage` plus `\newgeometry{...}`. `newpage`
@@ -1109,14 +1110,14 @@ The parser is schema-agnostic. Schema owns:
 
 Semantic modules own finite domains, canonical core construction, and backend
 independent meaning. MOS and schema do not decide whether a string such as
-`A4`, `a4paper`, or `landscape` is valid for layout; the layout semantic
-function does that after explicit normalization.
+`A4` or `landscape` is valid for layout; the layout semantic function does
+that after explicit normalization.
 
 Built-in shorthand data lives in constants such as:
 
 ```python
 LAYOUT_VALUE_SHADES = {
-    "A4": ShadeSpec("A4", lowerer="paper_preset", payload={"paper": "a4paper"}),
+    "A4": ShadeSpec("A4", lowerer="page_size", payload={"width": "210mm", "height": "297mm"}),
     "landscape": ShadeSpec(
         "landscape",
         lowerer="orientation",
@@ -1125,9 +1126,9 @@ LAYOUT_VALUE_SHADES = {
 }
 ```
 
-Adding `Legal` paper, renaming `A4`, or removing `landscape` changes schema
-data, semantic constants, and golden outputs only. It must not require a MOS
-parser change.
+Adding `Legal`, renaming `A4`, or removing `landscape` changes schema data,
+semantic constants, and golden outputs only. It must not require a MOS parser
+change.
 
 Adding an entirely new semantic family may add semantic validation and backend
 support, but it still must not add tag logic to the parser.

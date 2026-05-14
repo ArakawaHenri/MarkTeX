@@ -38,15 +38,15 @@ class MosParserTests(unittest.TestCase):
         with self.assertRaisesRegex(MarkTeXError, "escaped MOS call head"):
             parse_mos(r"\layout: A4", context="document")
         with self.assertRaisesRegex(MarkTeXError, "escaped MOS named argument"):
-            parse_mos(r"layout: \paper=A4", context="document")
+            parse_mos(r"layout: \width=210mm", context="document")
 
     def test_escaped_mos_value_is_still_a_value(self) -> None:
-        call = parse_mos(r"layout: paper=\A4, orientation=\landscape", context="document")[0]
-        paper = call.kwargs["paper"]
+        call = parse_mos(r"layout: width=\210mm, orientation=\landscape", context="document")[0]
+        width = call.kwargs["width"]
         orientation = call.kwargs["orientation"]
-        self.assertIsInstance(paper, RawString)
+        self.assertIsInstance(width, RawString)
         self.assertIsInstance(orientation, RawString)
-        self.assertEqual(paper.text, "A4")
+        self.assertEqual(width.text, "210mm")
         self.assertEqual(orientation.text, "landscape")
 
     def test_tuple_value_allows_leading_space(self) -> None:
@@ -66,6 +66,9 @@ class SchemaTests(unittest.TestCase):
         resolved = registry.resolve_call(call)
         self.assertEqual(resolved.head, "layout")
         self.assertEqual([arg.head for arg in resolved.args if isinstance(arg, CallUnit)], ["A4", "landscape"])
+        preset = resolved.args[0]
+        self.assertIsInstance(preset, CallUnit)
+        self.assertEqual(set(preset.kwargs), {"width", "height"})
 
     def test_removed_shorthand_changes_resolution_not_parse(self) -> None:
         call = parse_mos("layout: A4", context="document")[0]

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from marktex.semantics import PAGE_SIZE_PRESETS
 from marktex.schema.registry import CallSpec, ContextSpec, SchemaRegistry, ShadeSpec
 
 LAYOUT_VALUE_SHADES = {
-    "A4": ShadeSpec("A4", lowerer="paper_preset", payload={"paper": "a4paper"}),
-    "A5": ShadeSpec("A5", lowerer="paper_preset", payload={"paper": "a5paper"}),
-    "Letter": ShadeSpec("Letter", lowerer="paper_preset", payload={"paper": "letterpaper"}),
+    name: ShadeSpec(
+        name,
+        lowerer="page_size",
+        payload={"width": preset.width, "height": preset.height},
+    )
+    for name, preset in PAGE_SIZE_PRESETS.items()
+} | {
     "landscape": ShadeSpec(
         "landscape",
         lowerer="orientation",
@@ -18,8 +23,8 @@ LAYOUT_VALUE_SHADES = {
 def builtin_registry() -> SchemaRegistry:
     """Return a fresh built-in schema registry.
 
-    Shorthand/no-arg behavior lives in data constants above. Adding A-series
-    papers or style shorthands should change those constants, not the parser.
+    Shorthand/no-arg behavior lives in data constants above. Adding page-size
+    presets or style shorthands should change those constants, not the parser.
     """
 
     return SchemaRegistry(

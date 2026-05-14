@@ -251,7 +251,7 @@ class DriverTests(unittest.TestCase):
             "$$$python\n"
             "marktex.invoke(marktex.document_patch(\n"
             "    'layout',\n"
-            "    marktex.call('Letter', context='layout.value', paper='letterpaper'),\n"
+            "    marktex.call('Letter', context='layout.value', width='8.5in', height='11in'),\n"
             "))\n"
             "$$$\n"
             "Hello\n",
@@ -407,12 +407,12 @@ class DriverTests(unittest.TestCase):
 
     def test_layout_aliases_canonicalize_to_dimensions(self) -> None:
         shorthand = build_document("!# layout: A4\nHello\n", filename="test.mtx")
-        explicit = build_document("!# layout: paper=a4paper\nHello\n", filename="test.mtx")
-        keyword_alias = build_document("!# layout: paper=A4\nHello\n", filename="test.mtx")
+        explicit = build_document("!# layout: width=210mm, height=297mm\nHello\n", filename="test.mtx")
+        lowercase = build_document("!# layout: a4\nHello\n", filename="test.mtx")
         expected = r"\usepackage[paperwidth=210mm,paperheight=297mm]{geometry}"
         self.assertIn(expected, shorthand.target_text)
         self.assertIn(expected, explicit.target_text)
-        self.assertIn(expected, keyword_alias.target_text)
+        self.assertIn(expected, lowercase.target_text)
 
     def test_escape_provenance_on_document_directive_keys_and_values(self) -> None:
         escaped_opener = build_document(r"\!# layout: A4" "\n", filename="test.mtx")
@@ -423,17 +423,48 @@ class DriverTests(unittest.TestCase):
             build_document(r"!# \layout: A4" "\n", filename="test.mtx")
 
         value = build_document(
-            r"!# layout: paper=\A4, orientation=\landscape" "\nHello\n",
+            r"!# layout: width=\210mm, height=\297mm, orientation=\landscape" "\nHello\n",
             filename="test.mtx",
         )
         self.assertIn(r"\usepackage[paperwidth=297mm,paperheight=210mm]{geometry}", value.target_text)
 
-    def test_layout_applies_size_before_orientation(self) -> None:
+    def test_layout_applies_operations_in_parameter_order(self) -> None:
         build = build_document(
             "!# layout: width=100mm, height=200mm, orientation=landscape\nHello\n",
             filename="test.mtx",
         )
         self.assertIn(r"\usepackage[paperwidth=200mm,paperheight=100mm]{geometry}", build.target_text)
+
+        ordered = build_document(
+            "!# layout: width=100mm, orientation=landscape, height=200mm\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[paperwidth=297mm,paperheight=200mm]{geometry}", ordered.target_text)
+
+        preset_after_orientation = build_document(
+            "!# layout: landscape, A4\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(r"\usepackage[paperwidth=210mm,paperheight=297mm]{geometry}", preset_after_orientation.target_text)
+
+    def test_layout_size_and_orientation_operations_are_atomic(self) -> None:
+        narrowed_after_landscape = build_document(
+            "!# layout: A4, landscape, width=100mm, landscape\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(
+            r"\usepackage[paperwidth=210mm,paperheight=100mm]{geometry}",
+            narrowed_after_landscape.target_text,
+        )
+
+        repeated_presets_and_orientations = build_document(
+            "!# layout: A4, A5, landscape, portrait, landscape\nHello\n",
+            filename="test.mtx",
+        )
+        self.assertIn(
+            r"\usepackage[paperwidth=210mm,paperheight=148mm]{geometry}",
+            repeated_presets_and_orientations.target_text,
+        )
 
     def test_layout_orientation_is_atomic_noop_when_already_matching(self) -> None:
         build = build_document(
@@ -636,8 +667,10 @@ class DriverTests(unittest.TestCase):
         self.assertNotIn(r"\clearpage", build.target_text)
 
     def test_invalid_layout_and_margin_values_fail(self) -> None:
-        with self.assertRaisesRegex(MarkTeXError, "unsupported paper"):
-            build_document("!# layout: paper=foo\nHello\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "unknown layout kwargs: diagonal"):
+            build_document("!# layout: diagonal=wide\nHello\n", filename="test.mtx")
+        with self.assertRaisesRegex(MarkTeXError, "unsupported layout argument: Tabloid"):
+            build_document("!# layout: Tabloid\nHello\n", filename="test.mtx")
         with self.assertRaisesRegex(MarkTeXError, "unsupported orientation"):
             build_document("!# layout: orientation=diagonal\nHello\n", filename="test.mtx")
         with self.assertRaisesRegex(MarkTeXError, "invalid top dimension"):
@@ -2096,7 +2129,7 @@ class RuntimeApiTests(unittest.TestCase):
 
         raw = RawString("A4")
         tuple_value = TupleValue((raw,))
-        call = CallUnit("document", "layout", args=(raw,), kwargs={"paper": tuple_value})
+        call = CallUnit("document", "layout", args=(raw,), kwargs={"width": tuple_value})
         self.assertEqual(object_to_json(raw), raw.to_json())
         self.assertEqual(object_to_json(tuple_value), tuple_value.to_json())
         self.assertEqual(object_to_json(call), call.to_json())
